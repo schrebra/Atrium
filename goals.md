@@ -1,6 +1,6 @@
 # Goals
 
-Where Atrium stands, what is still needed, and in what order. Current state: **build 261118_1820**, database schema v14.
+Where Atrium stands, what is still needed, and in what order. Current state: **build 261118_2104**, database schema v15.
 
 **Status: early alpha — not for production use.** No production deployment exists; see the README's Project status section.
 
@@ -18,14 +18,14 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 - Picture sharing behind a scan gate, with the gallery viewer (All / Grouped by month / Calendar, continuous zoom)
 - Message edit/delete with global, per-channel, and per-user policy resolution; invisible deletions with a retained back-end record
 - Admin console: audit viewer, jobs, users & access, grouped-save settings with snapshot history and whole-state rollback, resource monitoring, health board, transition-only alerting
+- Threads: one-level replies scoped to a parent message, explicit follow state (reply or Follow — nothing else), per-thread read positions with computed unread state, thread notifications in the action center; a deleted root leaves its replies readable with no marker
 
 ## Roadmap — future features, in planned order
 
-1. **Threads (R-6).** Replies scoped to a parent message. One design point must be settled first: the original sketch assumed a deleted thread root leaves a tombstone that keeps the thread readable, which conflicts with the standing rule that deletions are invisible. The thread model gets redesigned around invisible deletion before any code is written.
-2. **General file uploads (R-4 remainder).** The attachment pipeline (scan gate, content-addressed store, renditions) currently accepts images. Extend it to arbitrary files with per-type policy.
-3. **Data export (R-8).** An operator export tool for channel history and audit data.
-4. **Voice/video calls (R-10).** LiveKit SFU. Planning basis: 20 rooms, 30 participants in the largest room (a configuration cap), 150 aggregate publishers. Placement of the LiveKit service (its own Linux VM vs. the main server) is decided when this attaches.
-5. **Boards (R-11).** Kanban-style boards, in scope from the original design. Playbooks are explicitly out.
+1. **General file uploads (R-4 remainder).** The attachment pipeline (scan gate, content-addressed store, renditions) currently accepts images. Extend it to arbitrary files with per-type policy.
+2. **Data export (R-8).** An operator export tool for channel history and audit data.
+3. **Voice/video calls (R-10).** LiveKit SFU. Planning basis: 20 rooms, 30 participants in the largest room (a configuration cap), 150 aggregate publishers. Placement of the LiveKit service (its own Linux VM vs. the main server) is decided when this attaches.
+4. **Boards (R-11).** Kanban-style boards, in scope from the original design. Playbooks are explicitly out.
 
 **Conditional:** webhooks (R-9) — only if a concrete consumer appears. Nothing is built speculatively.
 

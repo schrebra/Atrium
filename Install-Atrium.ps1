@@ -47,8 +47,8 @@ $ErrorActionPreference = 'Stop'
 # ============================================================================
 $Config = @{
     ProductName      = 'Atrium'
-    BundleVersion    = '261118_1820'
-    SchemaVersion    = 14
+    BundleVersion    = '261118_2104'
+    SchemaVersion    = 15
 
     # Deployment identity (Deploy mode, single VM)
     HostName         = 'atrium'                 # SAN on the cert, IIS host header
@@ -1025,7 +1025,30 @@ CREATE TABLE alert_log (
 CREATE INDEX alert_log_at_idx ON alert_log (at DESC, id DESC);
 CREATE INDEX alert_log_condition_idx ON alert_log (condition_key, at DESC);
 
-INSERT INTO schema_info (version) VALUES (14);
+-- R-6 threads (schema v15). A thread is a root message plus the
+-- replies carrying its id in messages.parent_id (the column has existed
+-- since the MVP schema). Follow state is explicit rows only — created
+-- when a user replies or follows, never inferred. Read state is a
+-- per-user position, mirroring channel_members.last_read_seq; unread
+-- reply counts are computed from it at read time, never stored.
+CREATE TABLE thread_follows (
+    user_id    bigint      NOT NULL REFERENCES users (id),
+    root_id    bigint      NOT NULL REFERENCES messages (id),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, root_id)
+);
+CREATE INDEX thread_follows_root_idx ON thread_follows (root_id);
+
+CREATE TABLE thread_reads (
+    user_id       bigint NOT NULL REFERENCES users (id),
+    root_id       bigint NOT NULL REFERENCES messages (id),
+    last_read_seq bigint NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, root_id)
+);
+
+CREATE INDEX messages_parent_idx ON messages (parent_id) WHERE parent_id IS NOT NULL;
+
+INSERT INTO schema_info (version) VALUES (15);
 '@
 }
 
@@ -1275,7 +1298,7 @@ builder.Services.AddSingleton<RateLimiter>();
 
 // ---- Console-editable operational settings (schema v7) ----
 // A bounded subset of operational settings is editable in the admin
-// console (design direction, overriding the study's display-only
+// console (Brandon's direction, overriding the study's display-only
 // stance for these keys only — see debate/admin-console-attachment.md).
 // The bootstrap/config value below is each setting's DEFAULT and is
 // never mutated; a server_settings row overrides it. Every enforcement
@@ -1720,7 +1743,7 @@ app.MapGet("/api/admin/sync/runs", async (HttpContext ctx, NpgsqlDataSource ds, 
 // destructive action (revoke-all-sessions, type-the-name gated). Every
 // endpoint is admin-only and answers non-admins with the shared explicit
 // 403. Settings: the bounded operational subset defined in settingDefs
-// is console-editable (schema v7 overrides, audited, live) under a design
+// is console-editable (schema v7 overrides, audited, live) at Brandon's
 // direction; everything else is displayed, never edited — those changes
 // go through the bootstrap. The console boundary is absolute: no
 // connection strings, filesystem paths, service account names,
@@ -3546,6 +3569,7 @@ app.MapGet("/api/channels", async (HttpContext ctx, NpgsqlDataSource ds, Effecti
     var globalDelete = settings.Get("message.deletePolicy");
     var rows = await QueryAsync(conn, @"
         SELECT c.id, c.kind, CASE WHEN c.kind = 'dm' THEN (SELECT u.display_name FROM channel_members m2 JOIN users u ON u.id = m2.user_id WHERE m2.channel_id = c.id AND m2.user_id <> $1) ELSE c.name END AS name, c.last_seq, m.last_read_seq,
+               (SELECT count(*) FROM messages rm WHERE rm.channel_id = c.id AND rm.parent_id IS NULL AND rm.deleted_at IS NULL AND rm.seq > m.last_read_seq) AS unread_count,
                (SELECT count(*) FROM channel_members mm WHERE mm.channel_id = c.id) AS member_count,
                CASE WHEN c.kind = 'dm' THEN (SELECT u.id FROM channel_members m3 JOIN users u ON u.id = m3.user_id WHERE m3.channel_id = c.id AND m3.user_id <> $1) END AS counterpart_id,
                c.edit_policy_override, c.delete_policy_override
@@ -3555,7 +3579,7 @@ app.MapGet("/api/channels", async (HttpContext ctx, NpgsqlDataSource ds, Effecti
     {
         id = (long)r["id"]!, kind = (string)r["kind"]!, name = r["name"] as string,
         memberCount = (long)r["member_count"]!,
-        unread = (long)r["last_seq"]! - (long)r["last_read_seq"]!,
+        unread = (long)r["unread_count"]!,
         counterpartId = r["counterpart_id"] as long?,
         editPolicy = myEdit ?? (r["edit_policy_override"] as int?) ?? globalEdit,
         deletePolicy = myDelete ?? (r["delete_policy_override"] as int?) ?? globalDelete
@@ -3701,6 +3725,7 @@ app.MapGet("/api/search", async (HttpContext ctx, NpgsqlDataSource ds, string? q
                c.kind AS channel_kind,
                CASE WHEN c.kind = 'dm' THEN (SELECT u2.display_name FROM channel_members m2 JOIN users u2 ON u2.id = m2.user_id WHERE m2.channel_id = c.id AND m2.user_id <> $1) ELSE c.name END AS channel_name,
                m.author_id, a.display_name AS author_name, a.username AS author_username,
+               m.parent_id, (SELECT p.seq FROM messages p WHERE p.id = m.parent_id) AS root_seq,
                m.seq, m.created_at, m.body
         FROM messages m
         CROSS JOIN tsq
@@ -3722,6 +3747,7 @@ app.MapGet("/api/search", async (HttpContext ctx, NpgsqlDataSource ds, string? q
             displayName = (string)r["author_name"]!,
             username = (string)r["author_username"]!,
             seq = (long)r["seq"]!,
+            parentId = r["parent_id"] as long?, rootSeq = r["root_seq"] as long?,
             createdAt = AsUtc(r["created_at"]),
             body = (string)r["body"]!
         })
@@ -3844,13 +3870,14 @@ app.MapGet("/api/channels/{id:long}/messages", async (HttpContext ctx, NpgsqlDat
     if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
     var take = Math.Clamp(limit ?? 50, 1, 200);
     var rows = await QueryAsync(conn, @"
-        SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at
+        SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at, m.parent_id
         FROM messages m JOIN users u ON u.id = m.author_id
-        WHERE m.channel_id = $1 AND ($2::bigint IS NULL OR m.seq < $2) AND m.deleted_at IS NULL
+        WHERE m.channel_id = $1 AND ($2::bigint IS NULL OR m.seq < $2) AND m.deleted_at IS NULL AND m.parent_id IS NULL
         ORDER BY m.seq DESC LIMIT $3", id, beforeSeq, take);
     rows.Reverse();
     var dtos = rows.Select(ToMessageDto).ToList();
     await FillAttachmentsAsync(conn, dtos, u.Id);
+    await FillThreadInfoAsync(conn, dtos, u.Id);
     return Results.Json(dtos);
 });
 
@@ -3861,13 +3888,111 @@ app.MapGet("/api/channels/{id:long}/messages/after", async (HttpContext ctx, Npg
     if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
     var take = Math.Clamp(limit ?? 1000, 1, 1000);
     var rows = await QueryAsync(conn, @"
-        SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at
+        SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at, m.parent_id
         FROM messages m JOIN users u ON u.id = m.author_id
-        WHERE m.channel_id = $1 AND m.seq > $2 AND m.deleted_at IS NULL
+        WHERE m.channel_id = $1 AND m.seq > $2 AND m.deleted_at IS NULL AND m.parent_id IS NULL
         ORDER BY m.seq ASC LIMIT $3", id, afterSeq, take);
     var dtos = rows.Select(ToMessageDto).ToList();
     await FillAttachmentsAsync(conn, dtos, u.Id);
+    await FillThreadInfoAsync(conn, dtos, u.Id);
     return Results.Json(dtos);
+});
+
+
+// ---- threads (R-6) ----
+// A thread is a root message plus the replies that carry its id in
+// parent_id. Threads are one level deep (enforced at send). Deleting a
+// root never deletes its replies: the thread stays readable with the
+// root simply absent — deletions are invisible everywhere, threads
+// included. Thread read state is a per-user position (thread_reads);
+// follow state is explicit rows (thread_follows), created by replying
+// or by the follow endpoint and by nothing else.
+static async Task<Dictionary<string, object?>?> ResolveThreadRootAsync(
+    NpgsqlConnection conn, long channelId, long rootSeq) =>
+    await QueryRowAsync(conn, @"
+        SELECT id, deleted_at FROM messages
+        WHERE channel_id = $1 AND seq = $2 AND parent_id IS NULL", channelId, rootSeq);
+
+app.MapGet("/api/channels/{id:long}/threads/{rootSeq:long}", async (HttpContext ctx, NpgsqlDataSource ds,
+    long id, long rootSeq, long? beforeSeq, int? limit) =>
+{
+    var u = (UserInfo)ctx.Items["user"]!;
+    await using var conn = await ds.OpenConnectionAsync();
+    if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
+    var rootRow = await ResolveThreadRootAsync(conn, id, rootSeq);
+    if (rootRow is null) return Results.NotFound(new { error = "thread not found" });
+    var rootId = (long)rootRow["id"]!;
+    MessageDto? root = null;
+    if (rootRow["deleted_at"] is null or DBNull)
+    {
+        var rrows = await QueryAsync(conn, @"
+            SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at, m.parent_id
+            FROM messages m JOIN users u ON u.id = m.author_id
+            WHERE m.id = $1", rootId);
+        root = ToMessageDto(rrows[0]);
+        var rootList = new List<MessageDto> { root };
+        await FillAttachmentsAsync(conn, rootList, u.Id);
+        await FillThreadInfoAsync(conn, rootList, u.Id);
+    }
+    var take = Math.Clamp(limit ?? 50, 1, 200);
+    var rows = await QueryAsync(conn, @"
+        SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at, m.parent_id
+        FROM messages m JOIN users u ON u.id = m.author_id
+        WHERE m.parent_id = $1 AND ($2::bigint IS NULL OR m.seq < $2) AND m.deleted_at IS NULL
+        ORDER BY m.seq DESC LIMIT $3", rootId, beforeSeq, take);
+    rows.Reverse();
+    var replies = rows.Select(ToMessageDto).ToList();
+    await FillAttachmentsAsync(conn, replies, u.Id);
+    var followed = await ScalarAsync<long>(conn,
+        "SELECT count(*) FROM thread_follows WHERE user_id = $1 AND root_id = $2", u.Id, rootId) > 0;
+    var lastRead = await ScalarAsync<long>(conn,
+        "SELECT COALESCE((SELECT last_read_seq FROM thread_reads WHERE user_id = $1 AND root_id = $2), 0)",
+        u.Id, rootId);
+    return Results.Json(new { root, replies, followedByMe = followed, lastReadSeq = lastRead, rootId });
+});
+
+app.MapPost("/api/channels/{id:long}/threads/{rootSeq:long}/follow", async (HttpContext ctx, NpgsqlDataSource ds,
+    long id, long rootSeq) =>
+{
+    var u = (UserInfo)ctx.Items["user"]!;
+    await using var conn = await ds.OpenConnectionAsync();
+    if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
+    var rootRow = await ResolveThreadRootAsync(conn, id, rootSeq);
+    if (rootRow is null) return Results.NotFound(new { error = "thread not found" });
+    await ExecAsync(conn,
+        "INSERT INTO thread_follows (user_id, root_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        u.Id, (long)rootRow["id"]!);
+    return Results.Ok();
+});
+
+app.MapDelete("/api/channels/{id:long}/threads/{rootSeq:long}/follow", async (HttpContext ctx, NpgsqlDataSource ds,
+    long id, long rootSeq) =>
+{
+    var u = (UserInfo)ctx.Items["user"]!;
+    await using var conn = await ds.OpenConnectionAsync();
+    if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
+    var rootRow = await ResolveThreadRootAsync(conn, id, rootSeq);
+    if (rootRow is null) return Results.NotFound(new { error = "thread not found" });
+    await ExecAsync(conn,
+        "DELETE FROM thread_follows WHERE user_id = $1 AND root_id = $2",
+        u.Id, (long)rootRow["id"]!);
+    return Results.Ok();
+});
+
+app.MapPost("/api/channels/{id:long}/threads/{rootSeq:long}/read", async (HttpContext ctx, NpgsqlDataSource ds,
+    long id, long rootSeq, ReadRequest req) =>
+{
+    var u = (UserInfo)ctx.Items["user"]!;
+    await using var conn = await ds.OpenConnectionAsync();
+    if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
+    var rootRow = await ResolveThreadRootAsync(conn, id, rootSeq);
+    if (rootRow is null) return Results.NotFound(new { error = "thread not found" });
+    await ExecAsync(conn, @"
+        INSERT INTO thread_reads (user_id, root_id, last_read_seq) VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, root_id)
+        DO UPDATE SET last_read_seq = GREATEST(thread_reads.last_read_seq, EXCLUDED.last_read_seq)",
+        u.Id, (long)rootRow["id"]!, req.Seq);
+    return Results.Ok();
 });
 
 app.MapPost("/api/channels/{id:long}/read", async (HttpContext ctx, NpgsqlDataSource ds, long id, ReadRequest req) =>
@@ -3910,6 +4035,25 @@ app.MapPost("/api/channels/{id:long}/messages", async (HttpContext ctx, NpgsqlDa
     await using var conn = await ds.OpenConnectionAsync();
     if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
 
+    // R-6: a reply's parent must be a root message in this channel that
+    // has not been deleted. Validated before the transaction so a bad
+    // parent fails the send outright, never partially.
+    long? parentId = null;
+    long parentSeq = 0;
+    if (req.ParentId is long pid)
+    {
+        var prow = await QueryRowAsync(conn, @"
+            SELECT seq, parent_id, deleted_at FROM messages WHERE id = $1 AND channel_id = $2", pid, id);
+        if (prow is null)
+            return Results.BadRequest(new { error = "the message you are replying to is not in this channel" });
+        if (prow["parent_id"] is not null and not DBNull)
+            return Results.BadRequest(new { error = "threads are one level deep: that message is itself a reply" });
+        if (prow["deleted_at"] is not null and not DBNull)
+            return Results.BadRequest(new { error = "that message was deleted; its thread is closed to new replies" });
+        parentId = pid;
+        parentSeq = (long)prow["seq"]!;
+    }
+
     await using var tx = await conn.BeginTransactionAsync();
     MessageDto dto;
     try
@@ -3917,8 +4061,23 @@ app.MapPost("/api/channels/{id:long}/messages", async (HttpContext ctx, NpgsqlDa
         var seq = await ScalarTxAsync<long>(tx,
             "UPDATE channels SET last_seq = last_seq + 1 WHERE id = $1 RETURNING last_seq", id);
         var newId = await ScalarTxAsync<long>(tx, @"
-            INSERT INTO messages (channel_id, seq, author_id, client_guid, body)
-            VALUES ($1, $2, $3, $4, $5) RETURNING id", id, seq, u.Id, clientGuid, body);
+            INSERT INTO messages (channel_id, seq, author_id, client_guid, body, parent_id)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id", id, seq, u.Id, clientGuid, body, parentId);
+        // Replying follows the thread: the only automatic follow there
+        // is, under the explicit-row follow model (design record).
+        if (parentId is long followRoot)
+        {
+            await ExecTxAsync(tx,
+                "INSERT INTO thread_follows (user_id, root_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                u.Id, followRoot);
+            // The author has seen the thread up to their own reply:
+            // their read position advances with it.
+            await ExecTxAsync(tx, @"
+                INSERT INTO thread_reads (user_id, root_id, last_read_seq) VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, root_id)
+                DO UPDATE SET last_read_seq = GREATEST(thread_reads.last_read_seq, EXCLUDED.last_read_seq)",
+                u.Id, followRoot, seq);
+        }
         // Link the attachments in the same transaction (persist-first):
         // the guarded UPDATE only lands for an attachment that is the
         // sender's own, in this channel, cleared, and not yet attached.
@@ -3943,13 +4102,13 @@ app.MapPost("/api/channels/{id:long}/messages", async (HttpContext ctx, NpgsqlDa
             sort++;
         }
         await tx.CommitAsync();
-        dto = new MessageDto(newId, seq, body, DateTimeOffset.UtcNow, u.Username, u.DisplayName);
+        dto = new MessageDto(newId, seq, body, DateTimeOffset.UtcNow, u.Username, u.DisplayName, null, false, parentId);
     }
     catch (PostgresException ex) when (ex.SqlState == "23505")
     {
         await tx.RollbackAsync();
         var rows = await QueryAsync(conn, @"
-            SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at
+            SELECT m.id, m.seq, m.body, m.created_at, u.username, u.display_name, m.edited_at, m.deleted_at, m.parent_id
             FROM messages m JOIN users u ON u.id = m.author_id
             WHERE m.author_id = $1 AND m.client_guid = $2", u.Id, clientGuid);
         if (rows.Count == 0) throw;
@@ -3960,10 +4119,13 @@ app.MapPost("/api/channels/{id:long}/messages", async (HttpContext ctx, NpgsqlDa
     await FillAttachmentsAsync(conn, new List<MessageDto> { dto }, u.Id);
     await hub.Clients.Group($"channel-{id}").SendAsync("MessageReceived", id, dto);
 
-    // Action-center notifications: one per other member. A mention outranks
-    // the plain message kinds. The message is already committed and
-    // broadcast, so a notification failure must not fail the send; it is
-    // logged instead.
+    // Action-center notifications. A root message notifies every other
+    // member. A thread reply notifies the thread's followers plus any
+    // mentioned member — and in a DM, the other member, exactly as a
+    // root DM message would (R-6 design record). A mention outranks the
+    // plain kinds in both cases. The message is already committed and
+    // broadcast, so a notification failure must not fail the send; it
+    // is logged instead.
     try
     {
         var chan = await QueryAsync(conn, "SELECT kind, name FROM channels WHERE id = $1", id);
@@ -3975,12 +4137,37 @@ app.MapPost("/api/channels/{id:long}/messages", async (HttpContext ctx, NpgsqlDa
         var preview = body.Length > 0
             ? (body.Length > 120 ? body[..120] : body)
             : attachmentIds.Count == 1 ? "sent an image" : $"sent {attachmentIds.Count} images";
-        foreach (var mrow in members)
+        if (parentId is long rootId)
         {
-            var kind = IsMention(body, (string)mrow["username"]!) ? "mention"
-                : chanKind == "dm" ? "dm" : "channel";
-            await CreateNotificationAsync(conn, hub, (long)mrow["id"]!, kind, u, id,
-                chanKind == "dm" ? u.DisplayName : chanName, preview);
+            var followers = await QueryAsync(conn, @"
+                SELECT u2.id, u2.username FROM thread_follows f JOIN users u2 ON u2.id = f.user_id
+                WHERE f.root_id = $1 AND f.user_id <> $2", rootId, u.Id);
+            var byId = new Dictionary<long, string>();
+            foreach (var f in followers) byId[(long)f["id"]!] = (string)f["username"]!;
+            foreach (var mrow in members)
+            {
+                var mid = (long)mrow["id"]!;
+                if (chanKind == "dm" || IsMention(body, (string)mrow["username"]!))
+                    byId[mid] = (string)mrow["username"]!;
+            }
+            var target = $"thread:{id}:{parentSeq}";
+            foreach (var (rid, rname) in byId)
+            {
+                var kind = IsMention(body, rname) ? "mention"
+                    : chanKind == "dm" ? "dm" : "channel";
+                await CreateNotificationAsync(conn, hub, rid, kind, u, id,
+                    chanKind == "dm" ? u.DisplayName : chanName, preview, target);
+            }
+        }
+        else
+        {
+            foreach (var mrow in members)
+            {
+                var kind = IsMention(body, (string)mrow["username"]!) ? "mention"
+                    : chanKind == "dm" ? "dm" : "channel";
+                await CreateNotificationAsync(conn, hub, (long)mrow["id"]!, kind, u, id,
+                    chanKind == "dm" ? u.DisplayName : chanName, preview);
+            }
         }
     }
     catch (Exception ex)
@@ -4009,7 +4196,7 @@ app.MapPut("/api/channels/{id:long}/messages/{seq:long}", async (HttpContext ctx
     await using var conn = await ds.OpenConnectionAsync();
     if (!await IsMemberAsync(conn, id, u.Id)) return Forbidden();
     var row = await QueryRowAsync(conn, @"
-        SELECT m.id, m.author_id, m.body, m.created_at, m.deleted_at,
+        SELECT m.id, m.author_id, m.body, m.created_at, m.deleted_at, m.parent_id,
                (SELECT count(*) FROM attachments a WHERE a.message_id = m.id) AS att_count
         FROM messages m WHERE m.channel_id = $1 AND m.seq = $2", id, seq);
     if (row is null) return Results.NotFound(new { error = "message not found" });
@@ -4057,7 +4244,7 @@ app.MapPut("/api/channels/{id:long}/messages/{seq:long}", async (HttpContext ctx
         new { channelId = id, seq });
     await tx.CommitAsync();
     var dto = new MessageDto(messageId, seq, body, createdAt, u.Username, u.DisplayName,
-        DateTimeOffset.UtcNow, false);
+        DateTimeOffset.UtcNow, false, row["parent_id"] as long?);
     await FillAttachmentsAsync(conn, new List<MessageDto> { dto }, u.Id);
     await hub.Clients.Group($"channel-{id}").SendAsync("MessageEdited", id, dto);
     return Results.Json(dto);
@@ -4228,15 +4415,16 @@ static bool IsMention(string body, string username) =>
     Regex.IsMatch(body, $@"(?<![\w@])@{Regex.Escape(username)}(?![\w])", RegexOptions.IgnoreCase);
 
 static async Task CreateNotificationAsync(NpgsqlConnection conn, IHubContext<ChatHub> hub,
-    long recipientId, string kind, UserInfo actor, long? channelId, string? channelName, string? preview)
+    long recipientId, string kind, UserInfo actor, long? channelId, string? channelName, string? preview,
+    string? target = null)
 {
     var nid = await ScalarAsync<long>(conn, @"
-        INSERT INTO notifications (user_id, kind, actor_id, channel_id, preview)
-        VALUES ($1, $2, $3, $4, $5) RETURNING id", recipientId, kind, actor.Id, channelId, preview);
+        INSERT INTO notifications (user_id, kind, actor_id, channel_id, preview, target)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id", recipientId, kind, actor.Id, channelId, preview, target);
     await hub.Clients.Group($"user-{recipientId}").SendAsync("NotificationReceived", new
     {
         id = nid, kind, actorUsername = actor.Username, actorDisplayName = actor.DisplayName,
-        channelId, channelName, preview, target = (string?)null,
+        channelId, channelName, preview, target,
         createdAt = DateTimeOffset.UtcNow, readAt = (DateTimeOffset?)null
     });
 }
@@ -4248,6 +4436,13 @@ static async Task<T> ScalarAsync<T>(NpgsqlConnection conn, string sql, params ob
     var result = await cmd.ExecuteScalarAsync();
     if (result is null or DBNull) return default!;
     return (T)Convert.ChangeType(result, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T));
+}
+
+static async Task ExecTxAsync(NpgsqlTransaction tx, string sql, params object?[] args)
+{
+    await using var cmd = new NpgsqlCommand(sql, tx.Connection, tx);
+    foreach (var a in args) cmd.Parameters.AddWithValue(a ?? DBNull.Value);
+    await cmd.ExecuteNonQueryAsync();
 }
 
 static async Task<T> ScalarTxAsync<T>(NpgsqlTransaction tx, string sql, params object?[] args)
@@ -4294,6 +4489,36 @@ static async Task<Dictionary<string, object?>?> QueryRowAsync(NpgsqlConnection c
 // the attachment endpoints and fixed here for every membership check.
 static IResult Forbidden() =>
     Results.Json(new { error = "forbidden" }, statusCode: StatusCodes.Status403Forbidden);
+
+// R-6: fills the thread aggregates on a batch of root-message DTOs in
+// one query: the non-deleted reply count, the last reply time, the
+// viewer's unread state (computed from the thread_reads position —
+// never a stored counter), and the viewer's follow state.
+static async Task FillThreadInfoAsync(NpgsqlConnection conn, List<MessageDto> dtos, long viewerId)
+{
+    var roots = dtos.Where(d => d.ParentId is null).ToList();
+    if (roots.Count == 0) return;
+    var ids = roots.Select(d => d.Id).ToArray();
+    var rows = await QueryAsync(conn, @"
+        SELECT m.id AS root_id,
+               (SELECT count(*) FROM messages r WHERE r.parent_id = m.id AND r.deleted_at IS NULL) AS reply_count,
+               (SELECT max(r.created_at) FROM messages r WHERE r.parent_id = m.id AND r.deleted_at IS NULL) AS last_reply_at,
+               EXISTS (SELECT 1 FROM messages r WHERE r.parent_id = m.id AND r.deleted_at IS NULL
+                       AND r.author_id <> $2
+                       AND r.seq > COALESCE((SELECT tr.last_read_seq FROM thread_reads tr
+                                             WHERE tr.user_id = $2 AND tr.root_id = m.id), 0)) AS has_unread,
+               EXISTS (SELECT 1 FROM thread_follows f WHERE f.user_id = $2 AND f.root_id = m.id) AS followed
+        FROM messages m WHERE m.id = ANY($1)", ids, viewerId);
+    var byId = rows.ToDictionary(r => (long)r["root_id"]!);
+    foreach (var d in roots)
+    {
+        if (!byId.TryGetValue(d.Id, out var r)) continue;
+        d.ReplyCount = (int)(long)r["reply_count"]!;
+        d.LastReplyAt = r["last_reply_at"] is null or DBNull ? null : AsUtc(r["last_reply_at"]);
+        d.HasUnreadReplies = (bool)r["has_unread"]!;
+        d.FollowedByMe = (bool)r["followed"]!;
+    }
+}
 
 // Loads the attachment DTOs for a batch of message DTOs in one query.
 // Cleared attachments are visible to every member; any other state is
@@ -4596,7 +4821,8 @@ static MessageDto ToMessageDto(Dictionary<string, object?> r) => new(
     r["deleted_at"] is null or DBNull ? (string)r["body"]! : "",
     AsUtc(r["created_at"]), (string)r["username"]!, (string)r["display_name"]!,
     r["edited_at"] is DateTime or DateTimeOffset ? AsUtc(r["edited_at"]) : null,
-    r["deleted_at"] is not null and not DBNull);
+    r["deleted_at"] is not null and not DBNull,
+    r.TryGetValue("parent_id", out var pid) ? pid as long? : null);
 
 // Npgsql returns DateTime for timestamptz on the untyped read path; normalize.
 static DateTimeOffset AsUtc(object? value) => value switch
@@ -4685,14 +4911,21 @@ record CreateChannelRequest(string Name);
 record AddMemberRequest(string Username);
 record DmRequest(string Username);
 record ReadRequest(long Seq);
-record SendMessageRequest(string? Body, string ClientGuid, List<long>? AttachmentIds = null);
+record SendMessageRequest(string? Body, string ClientGuid, List<long>? AttachmentIds = null, long? ParentId = null);
 record EditMessageRequest(string? Body);
 record MessagePolicyRequest(int? EditPolicy, int? DeletePolicy);
-record MessageDto(long Id, long Seq, string Body, DateTimeOffset CreatedAt, string Username, string DisplayName, DateTimeOffset? EditedAt = null, bool Deleted = false)
+record MessageDto(long Id, long Seq, string Body, DateTimeOffset CreatedAt, string Username, string DisplayName, DateTimeOffset? EditedAt = null, bool Deleted = false, long? ParentId = null)
 {
     // R-4: attachments are separate records linked to the message, never
     // body markup. Filled by FillAttachmentsAsync; empty for text-only.
     public List<AttachmentDto> Attachments { get; set; } = new();
+
+    // R-6: thread aggregates for root messages, filled by
+    // FillThreadInfoAsync; defaults elsewhere (replies, single reads).
+    public int ReplyCount { get; set; }
+    public DateTimeOffset? LastReplyAt { get; set; }
+    public bool HasUnreadReplies { get; set; }
+    public bool FollowedByMe { get; set; }
 }
 
 record AttachmentConfig(string StorePath, long MaxBytes, int MaxFiles, int MaxPixels, string Scanner, string DefenderPath);
@@ -7644,10 +7877,15 @@ using System.Net.Http.Json;
 namespace Atrium.Client.Services;
 
 public record ChannelDto(long Id, string Kind, string? Name, long MemberCount, long Unread, long? CounterpartId, int EditPolicy = 2, int DeletePolicy = 1);
-public record MessageDto(long Id, long Seq, string Body, DateTimeOffset CreatedAt, string Username, string DisplayName, DateTimeOffset? EditedAt = null, bool Deleted = false)
+public record MessageDto(long Id, long Seq, string Body, DateTimeOffset CreatedAt, string Username, string DisplayName, DateTimeOffset? EditedAt = null, bool Deleted = false, long? ParentId = null)
 {
     // R-4: attachments are separate records linked to the message.
     public List<AttachmentDto> Attachments { get; set; } = new();
+    // R-6: thread aggregates on root messages (server-computed).
+    public int ReplyCount { get; set; }
+    public DateTimeOffset? LastReplyAt { get; set; }
+    public bool HasUnreadReplies { get; set; }
+    public bool FollowedByMe { get; set; }
 }
 public record AttachmentDto(long Id, string Name, string ContentType, long ByteSize, int Width, int Height,
     int FrameCount, string State, string? StateDetail);
@@ -7671,7 +7909,9 @@ public record PresenceDto(long UserId, string Username, string DisplayName, stri
     DateTimeOffset? ConnectedSince, DateTimeOffset? LastActiveAt, DateTimeOffset? LastSeenAt,
     List<PresenceConnectionDto> Connections);
 public record SearchResultDto(long MessageId, long ChannelId, string? ChannelName, string ChannelKind,
-    long AuthorId, string DisplayName, string Username, long Seq, DateTimeOffset CreatedAt, string Body);
+    long AuthorId, string DisplayName, string Username, long Seq, DateTimeOffset CreatedAt, string Body,
+    long? ParentId = null, long? RootSeq = null);
+public record ThreadDto(MessageDto? Root, List<MessageDto> Replies, bool FollowedByMe, long LastReadSeq, long RootId);
 
 // ---- Admin console (R-5 + R-12) ----
 public record AuditItemDto(long Id, DateTimeOffset At, long? ActorUserId, string? ActorName,
@@ -7887,10 +8127,10 @@ public sealed class Api(HttpClient http)
         await http.GetFromJsonAsync<List<MessageDto>>($"/api/channels/{channelId}/messages/after?afterSeq={afterSeq}") ?? new();
 
     public async Task<(MessageDto? Message, string? Error)> SendAsync(long channelId, string body, Guid clientGuid,
-        List<long>? attachmentIds = null)
+        List<long>? attachmentIds = null, long? parentId = null)
     {
         var res = await http.PostAsJsonAsync($"/api/channels/{channelId}/messages",
-            new { body, clientGuid = clientGuid.ToString(), attachmentIds });
+            new { body, clientGuid = clientGuid.ToString(), attachmentIds, parentId });
         if (res.IsSuccessStatusCode)
             return (await res.Content.ReadFromJsonAsync<MessageDto>(), null);
         var err = await res.Content.ReadFromJsonAsync<ErrorResult>();
@@ -7920,6 +8160,20 @@ public sealed class Api(HttpClient http)
 
     public async Task MarkReadAsync(long channelId, long seq) =>
         await http.PostAsJsonAsync($"/api/channels/{channelId}/read", new { seq });
+
+    // ---- R-6: threads ----
+    public async Task<ThreadDto?> ThreadAsync(long channelId, long rootSeq, long? beforeSeq = null) =>
+        await http.GetFromJsonAsync<ThreadDto>(
+            $"/api/channels/{channelId}/threads/{rootSeq}?limit=50" + (beforeSeq is null ? "" : $"&beforeSeq={beforeSeq}"));
+
+    public async Task FollowThreadAsync(long channelId, long rootSeq) =>
+        await http.PostAsync($"/api/channels/{channelId}/threads/{rootSeq}/follow", null);
+
+    public async Task UnfollowThreadAsync(long channelId, long rootSeq) =>
+        await http.DeleteAsync($"/api/channels/{channelId}/threads/{rootSeq}/follow");
+
+    public async Task MarkThreadReadAsync(long channelId, long rootSeq, long seq) =>
+        await http.PostAsJsonAsync($"/api/channels/{channelId}/threads/{rootSeq}/read", new { seq });
 
     // ---- Admin console ----
     public async Task<AuditPageDto?> ConsoleAuditAsync(string? actor, string? action,
@@ -10899,7 +11153,7 @@ html, body { height: 100%; margin: 0; background: var(--center-bg); color: rgba(
 .lb-rail-resize { flex: none; width: 10px; margin-left: -5px; margin-right: -5px; cursor: ew-resize; position: relative; z-index: 5; touch-action: none; }
 .lb-rail-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background .15s; }
 .lb-rail-resize:hover::after, .lb-rail-resize:active::after { background: rgba(91,140,255,0.55); }
-/* Thumbnails scale with the rail width (spec, Nov 17, 2026):
+/* Thumbnails scale with the rail width (Brandon's spec, Nov 17, 2026):
    in the flat rail a thumbnail takes the rail's full inner width; in
    the grouped / day-filtered grids it takes one of three columns.
    Aspect is square (object-fit cover) in both, so a wider rail makes
@@ -11282,6 +11536,20 @@ html, body { height: 100%; margin: 0; background: var(--center-bg); color: rgba(
 .edit-input { width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.05); color: inherit; border: 1px solid rgba(255,255,255,0.16); border-radius: 6px; padding: 6px 8px; font: inherit; resize: vertical; }
 .edit-actions { display: flex; gap: 6px; }
 
+
+/* ---- R-6 threads ---- */
+.thread-chip { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; padding: 3px 9px; background: #21303f; border: 1px solid var(--line); border-radius: 6px; color: var(--text-dim); font-size: 12.5px; cursor: pointer; }
+.thread-chip:hover { border-color: #5b8cff; color: inherit; }
+.thread-chip .thread-dot { width: 8px; height: 8px; border-radius: 50%; background: #e5484d; flex: none; }
+.thread-chip .thread-followed { color: #5b8cff; }
+.thread-rhs .thread-root { border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px; }
+.thread-composer { border-top: 1px solid var(--line); padding: 10px 12px; }
+.chat-pane { position: relative; }
+.thread-overlay { position: absolute; inset: 0; background: #1e2938; display: flex; flex-direction: column; z-index: 6; }
+.thread-bar { height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.thread-bar .thread-title { font-weight: 700; font-size: 14px; }
+.thread-scroll { flex: 1; overflow-y: auto; padding: 10px 12px; min-height: 0; }
+.thread-overlay .thread-root { border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 10px; }
 '@
 
     $sources['src/Client/wwwroot/js/app.js'] = @'
@@ -11327,6 +11595,12 @@ window.atrium = {
     },
     loadDraft: function (id) { return localStorage.getItem(this.draftKey(id)) || ''; },
     clearDraft: function (id) { localStorage.removeItem(this.draftKey(id)); },
+    saveThreadDraft: function (id, text) {
+        if ((text || '').trim().length === 0) localStorage.removeItem('atrium-thread-draft-' + id);
+        else localStorage.setItem('atrium-thread-draft-' + id, text);
+    },
+    loadThreadDraft: function (id) { return localStorage.getItem('atrium-thread-draft-' + id) || ''; },
+    clearThreadDraft: function (id) { localStorage.removeItem('atrium-thread-draft-' + id); },
     listDraftChannels: function () {
         var ids = [];
         for (var i = 0; i < localStorage.length; i++) {
@@ -11533,7 +11807,7 @@ window.atrium = {
             clearTimeout(this._timer);
         }
     },
-    // Full-view rail resize drag (spec, Nov 17, 2026). A
+    // Full-view rail resize drag (Brandon's spec, Nov 17, 2026). A
     // pointerdown on the .lb-rail-resize handle starts a document-level
     // drag: the rail's inline width follows the pointer (clamped to
     // [120, min(520, 50% of the lightbox width)]), .NET is notified on
@@ -11865,6 +12139,117 @@ else
                                 {
                                     <div class="drop-overlay"><span>Drop images to attach them here</span></div>
                                 }
+                                @if (p.ThreadRootSeq is not null)
+                                {
+                                    <div class="thread-overlay">
+                                        <div class="thread-bar">
+                                            <button class="msg-action" @onclick="() => CloseInstanceThread(p)">&#8249; Back</button>
+                                            <span class="thread-title">Thread</span>
+                                            <div style="flex:1;"></div>
+                                            <button class="msg-action" @onclick="() => ToggleThreadFollow(p)">@(p.ThreadFollowed ? "Following" : "Follow")</button>
+                                        </div>
+                                        <div class="thread-scroll" @ref="p.ThreadListEl">
+                                            @if (p.ThreadRoot is not null)
+                                            {
+                                                <div class="thread-root">
+                                                    <div class="message-row">
+                                                        <MudTooltip Placement="Placement.Top">
+                                                            <ChildContent>
+                                                                <span class="avatar-wrap">
+                                                                    <span class="avatar" style="background:@AvatarColor(p.ThreadRoot.Username)">@Initials(p.ThreadRoot.DisplayName)</span>
+                                                                    <span class="presence @PresenceDotClass(PresenceByUsername(p.ThreadRoot.Username))"></span>
+                                                                </span>
+                                                            </ChildContent>
+                                                            <TooltipContent>@PresenceTip(p.ThreadRoot.DisplayName, PresenceByUsername(p.ThreadRoot.Username))</TooltipContent>
+                                                        </MudTooltip>
+                                                        <div class="message-main">
+                                                            <div class="message-head">
+                                                                <span class="author" @onclick="() => OpenProfileFrom(inst, p.ThreadRoot.Username)" title="View profile">@p.ThreadRoot.DisplayName</span><span class="time">@FmtWhen(p.ThreadRoot.CreatedAt)</span>
+                                                            </div>
+                                                            <div class="message-body">@RenderBody(p.ThreadRoot.Body)@if (p.ThreadRoot.EditedAt is not null) { <span class="edited-mark">(edited)</span> }</div>
+                                                            @RenderAttachments(p.ThreadRoot, p.Channel.Id)
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+                                            @if (p.ThreadHasOlder)
+                                            {
+                                                <div style="text-align:center;">
+                                                    <MudButton Size="Size.Small" OnClick="() => LoadOlderThread(p)">Load older replies</MudButton>
+                                                </div>
+                                            }
+                                            @foreach (var m in p.ThreadReplies)
+                                            {
+                                                <div class="message-row @(m.Id == _highlightMessageId ? "highlight" : "")">
+                                                    <MudTooltip Placement="Placement.Top">
+                                                        <ChildContent>
+                                                            <span class="avatar-wrap">
+                                                                <span class="avatar" style="background:@AvatarColor(m.Username)">@Initials(m.DisplayName)</span>
+                                                                <span class="presence @PresenceDotClass(PresenceByUsername(m.Username))"></span>
+                                                            </span>
+                                                        </ChildContent>
+                                                        <TooltipContent>@PresenceTip(m.DisplayName, PresenceByUsername(m.Username))</TooltipContent>
+                                                    </MudTooltip>
+                                                    <div class="message-main">
+                                                        <div class="message-head">
+                                                            <span class="author" @onclick="() => OpenProfileFrom(inst, m.Username)" title="View profile">@m.DisplayName</span><span class="time">@FmtWhen(m.CreatedAt)</span>
+                                                        </div>
+                                                        @if (p.Editing is not null && p.Editing.Seq == m.Seq)
+                                                        {
+                                                            <div class="edit-box">
+                                                                <textarea class="edit-input" @bind="p.EditText" @bind:event="oninput" rows="3"></textarea>
+                                                                @if (p.EditError is not null) { <div class="error">@p.EditError</div> }
+                                                                <div class="edit-actions">
+                                                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SavePopoutEdit(p)">Save</MudButton>
+                                                                    <MudButton Size="Size.Small" OnClick="() => CancelPopoutEdit(p)">Cancel</MudButton>
+                                                                </div>
+                                                            </div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="message-body">@RenderBody(m.Body)@if (m.EditedAt is not null) { <span class="edited-mark">(edited)</span> }</div>
+                                                            @RenderAttachments(m, p.Channel.Id)
+                                                        }
+                                                        @if (!(p.Editing is not null && p.Editing.Seq == m.Seq) && (CanEdit(p.Channel, m) || CanDelete(p.Channel, m)))
+                                                        {
+                                                            <div class="msg-actions">
+                                                                @if (CanEdit(p.Channel, m)) { <button class="msg-action" @onclick="() => StartPopoutEdit(p, m)">Edit</button> }
+                                                                @if (CanDelete(p.Channel, m))
+                                                                {
+                                                                    @if (p.ConfirmDeleteSeq == m.Seq)
+                                                                    {
+                                                                        <button class="msg-action danger" @onclick="() => DeletePopoutMessage(p, m)">Confirm delete</button>
+                                                                        <button class="msg-action" @onclick="() => { p.ConfirmDeleteSeq = 0; StateHasChanged(); }">Keep</button>
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                        <button class="msg-action" @onclick="() => { p.ConfirmDeleteSeq = m.Seq; StateHasChanged(); }">Delete</button>
+                                                                    }
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            }
+                                            @if (p.ThreadRoot is null && p.ThreadReplies.Count == 0)
+                                            {
+                                                <div class="notif-empty">No replies yet.</div>
+                                            }
+                                        </div>
+                                        <div class="composer thread-composer">
+                                            <div class="error">@p.ThreadError</div>
+                                            <div class="composer-box">
+                                                <textarea value="@p.ThreadDraft" @oninput="e => ThreadDraftPopout(p, e)" @onkeydown="e => ThreadKeyPopout(e, p)"
+                                                          spellcheck="true" rows="3" maxlength="@MaxLen" placeholder="Reply in thread..."></textarea>
+                                                <div class="composer-toolbar">
+                                                    <div class="spacer"></div>
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" OnClick="() => SendThreadReply(p)" title="Send reply" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+
                                 <div class="message-list" @ref="p.ListEl">
                                     @if (p.HasOlder)
                                     {
@@ -11921,10 +12306,20 @@ else
                                                 {
                                                     <div class="message-body">@RenderBody(m.Body)@if (m.EditedAt is not null) { <span class="edited-mark">(edited)</span> }</div>
                                                     @RenderAttachments(m, p.Channel.Id)
+                                                    @if (m.ReplyCount > 0)
+                                                    {
+                                                        <button class="thread-chip" @onclick="() => OpenThreadInInstance(inst, m)" title="Open thread">
+                                                @if (m.HasUnreadReplies) { <span class="thread-dot"></span> }
+                                                <span>@m.ReplyCount @(m.ReplyCount == 1 ? "reply" : "replies")</span>
+                                                @if (m.FollowedByMe) { <span class="thread-followed">Following</span> }
+                                                @if (m.LastReplyAt is not null) { <span>last reply @FmtWhen(m.LastReplyAt.Value)</span> }
+                                            </button>
+                                                    }
                                                 }
-                                                @if (!(p.Editing is not null && p.Editing.Seq == m.Seq) && (CanEdit(p.Channel, m) || CanDelete(p.Channel, m)))
+                                                @if (!(p.Editing is not null && p.Editing.Seq == m.Seq))
                                                 {
                                                     <div class="msg-actions">
+                                                        <button class="msg-action" @onclick="() => OpenThreadInInstance(inst, m)">Reply</button>
                                                         @if (CanEdit(p.Channel, m)) { <button class="msg-action" @onclick="() => StartPopoutEdit(p, m)">Edit</button> }
                                                         @if (CanDelete(p.Channel, m))
                                                         {
@@ -12512,10 +12907,20 @@ else
                                     {
                                         <div class="message-body">@RenderBody(m.Body)@if (m.EditedAt is not null) { <span class="edited-mark">(edited)</span> }</div>
                                         @RenderAttachments(m, _open.Id)
+                                        @if (m.ReplyCount > 0)
+                                        {
+                                            <button class="thread-chip" @onclick="() => OpenThread(m)" title="Open thread">
+                                                @if (m.HasUnreadReplies) { <span class="thread-dot"></span> }
+                                                <span>@m.ReplyCount @(m.ReplyCount == 1 ? "reply" : "replies")</span>
+                                                @if (m.FollowedByMe) { <span class="thread-followed">Following</span> }
+                                                @if (m.LastReplyAt is not null) { <span>last reply @FmtWhen(m.LastReplyAt.Value)</span> }
+                                            </button>
+                                        }
                                     }
-                                    @if (!(_mainEditing is not null && _mainEditing.Seq == m.Seq) && (CanEdit(_open, m) || CanDelete(_open, m)))
+                                    @if (!(_mainEditing is not null && _mainEditing.Seq == m.Seq))
                                     {
                                         <div class="msg-actions">
+                                            <button class="msg-action" @onclick="() => OpenThread(m)">Reply</button>
                                             @if (CanEdit(_open, m)) { <button class="msg-action" @onclick="() => StartMainEdit(m)">Edit</button> }
                                             @if (CanDelete(_open, m))
                                             {
@@ -12607,6 +13012,116 @@ else
                     </div>
                 }
             </div>
+            @if (_threadRootSeq is not null && _open is not null)
+            {
+                <div class="mm-rhs thread-rhs">
+                    <div class="rhs-head">
+                        <span style="flex:1;">Thread</span>
+                        <MudButton Size="Size.Small" Color="@(_threadFollowed ? Color.Default : Color.Primary)" OnClick="ToggleThreadFollow">@(_threadFollowed ? "Following" : "Follow")</MudButton>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="CloseThread" />
+                    </div>
+                    <div class="rhs-scroll" @ref="_threadListEl">
+                        @if (_threadRoot is not null)
+                        {
+                            <div class="thread-root">
+                                <div class="message-row">
+                                    <MudTooltip Placement="Placement.Top">
+                                        <ChildContent>
+                                            <span class="avatar-wrap">
+                                                <span class="avatar" style="background:@AvatarColor(_threadRoot.Username)">@Initials(_threadRoot.DisplayName)</span>
+                                                <span class="presence @PresenceDotClass(PresenceByUsername(_threadRoot.Username))"></span>
+                                            </span>
+                                        </ChildContent>
+                                        <TooltipContent>@PresenceTip(_threadRoot.DisplayName, PresenceByUsername(_threadRoot.Username))</TooltipContent>
+                                    </MudTooltip>
+                                    <div class="message-main">
+                                        <div class="message-head">
+                                            <span class="author" @onclick="() => OpenProfile(_threadRoot.Username)" title="View profile">@_threadRoot.DisplayName</span><span class="time">@FmtWhen(_threadRoot.CreatedAt)</span>
+                                        </div>
+                                        <div class="message-body">@RenderBody(_threadRoot.Body)@if (_threadRoot.EditedAt is not null) { <span class="edited-mark">(edited)</span> }</div>
+                                        @RenderAttachments(_threadRoot, _open.Id)
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        @if (_threadHasOlder)
+                        {
+                            <div style="text-align:center;">
+                                <MudButton Size="Size.Small" OnClick="LoadOlderThread">Load older replies</MudButton>
+                            </div>
+                        }
+                        @foreach (var m in _threadReplies)
+                        {
+                            <div class="message-row @(m.Id == _highlightMessageId ? "highlight" : "")">
+                                <MudTooltip Placement="Placement.Top">
+                                    <ChildContent>
+                                        <span class="avatar-wrap">
+                                            <span class="avatar" style="background:@AvatarColor(m.Username)">@Initials(m.DisplayName)</span>
+                                            <span class="presence @PresenceDotClass(PresenceByUsername(m.Username))"></span>
+                                        </span>
+                                    </ChildContent>
+                                    <TooltipContent>@PresenceTip(m.DisplayName, PresenceByUsername(m.Username))</TooltipContent>
+                                </MudTooltip>
+                                <div class="message-main">
+                                    <div class="message-head">
+                                        <span class="author" @onclick="() => OpenProfile(m.Username)" title="View profile">@m.DisplayName</span><span class="time">@FmtWhen(m.CreatedAt)</span>
+                                    </div>
+                                    @if (_threadEditing is not null && _threadEditing.Seq == m.Seq)
+                                    {
+                                        <div class="edit-box">
+                                            <textarea class="edit-input" @bind="_threadEditText" @bind:event="oninput" rows="3"></textarea>
+                                            @if (_threadEditError is not null) { <div class="error">@_threadEditError</div> }
+                                            <div class="edit-actions">
+                                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveThreadEdit">Save</MudButton>
+                                                <MudButton Size="Size.Small" OnClick="() => { _threadEditing = null; _threadEditError = null; }">Cancel</MudButton>
+                                            </div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="message-body">@RenderBody(m.Body)@if (m.EditedAt is not null) { <span class="edited-mark">(edited)</span> }</div>
+                                        @RenderAttachments(m, _open.Id)
+                                    }
+                                    @if (!(_threadEditing is not null && _threadEditing.Seq == m.Seq) && (CanEdit(_open, m) || CanDelete(_open, m)))
+                                    {
+                                        <div class="msg-actions">
+                                            @if (CanEdit(_open, m)) { <button class="msg-action" @onclick="() => StartThreadEdit(m)">Edit</button> }
+                                            @if (CanDelete(_open, m))
+                                            {
+                                                @if (_threadConfirmDeleteSeq == m.Seq)
+                                                {
+                                                    <button class="msg-action danger" @onclick="() => DeleteThreadMessage(m)">Confirm delete</button>
+                                                    <button class="msg-action" @onclick="() => { _threadConfirmDeleteSeq = 0; StateHasChanged(); }">Keep</button>
+                                                }
+                                                else
+                                                {
+                                                    <button class="msg-action" @onclick="() => { _threadConfirmDeleteSeq = m.Seq; StateHasChanged(); }">Delete</button>
+                                                }
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        @if (_threadRoot is null && _threadReplies.Count == 0)
+                        {
+                            <div class="notif-empty">No replies yet.</div>
+                        }
+                    </div>
+                    <div class="composer thread-composer">
+                        <div class="error">@_threadError</div>
+                        <div class="composer-box">
+                            <textarea value="@_threadDraft" @oninput="OnThreadDraftInput" @onkeydown="ThreadComposerKey"
+                                      spellcheck="true" rows="3" maxlength="@MaxLen" placeholder="Reply in thread..."></textarea>
+                            <div class="composer-toolbar">
+                                <div class="spacer"></div>
+                                <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" OnClick="SendThreadReply" title="Send reply" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+
             @if (_showMembers && _open is not null)
             {
                 <div class="mm-rhs">
@@ -12946,10 +13461,20 @@ else
                             {
                                 <div class="message-body">@RenderBody(m.Body)@if (m.EditedAt is not null) { <span class="edited-mark">(edited)</span> }</div>
                                 @RenderAttachments(m, p.Channel.Id)
+                                @if (m.ReplyCount > 0)
+                                {
+                                    <button class="thread-chip" @onclick="() => OpenThreadFromPopout(p, m)" title="Open thread">
+                                                @if (m.HasUnreadReplies) { <span class="thread-dot"></span> }
+                                                <span>@m.ReplyCount @(m.ReplyCount == 1 ? "reply" : "replies")</span>
+                                                @if (m.FollowedByMe) { <span class="thread-followed">Following</span> }
+                                                @if (m.LastReplyAt is not null) { <span>last reply @FmtWhen(m.LastReplyAt.Value)</span> }
+                                            </button>
+                                }
                             }
-                            @if (!(p.Editing is not null && p.Editing.Seq == m.Seq) && (CanEdit(p.Channel, m) || CanDelete(p.Channel, m)))
+                            @if (!(p.Editing is not null && p.Editing.Seq == m.Seq))
                             {
                                 <div class="msg-actions">
+                                    <button class="msg-action" @onclick="() => OpenThreadFromPopout(p, m)">Reply</button>
                                     @if (CanEdit(p.Channel, m)) { <button class="msg-action" @onclick="() => StartPopoutEdit(p, m)">Edit</button> }
                                     @if (CanDelete(p.Channel, m))
                                     {
@@ -13194,6 +13719,19 @@ else
     private List<long> _draftChannels = new();
     private bool _showDrafts;
     private bool _showMembers;
+    // ---- R-6 threads (main pane) ----
+    private long? _threadRootSeq;
+    private long _threadRootId;
+    private MessageDto? _threadRoot;
+    private List<MessageDto> _threadReplies = new();
+    private bool _threadFollowed, _threadHasOlder;
+    private string _threadDraft = "";
+    private string? _threadError;
+    private MessageDto? _threadEditing;
+    private string _threadEditText = "";
+    private string? _threadEditError;
+    private long _threadConfirmDeleteSeq;
+    private ElementReference _threadListEl;
     private List<MemberDto> _members = new();
     private Dictionary<long, PresenceDto> _presence = new();
     private CancellationTokenSource? _presenceCts;
@@ -13231,6 +13769,17 @@ else
         public ElementReference PaneEl, ComposerEl;
         public bool HasOlder;
         public List<PendingUpload> Pending = new();
+        // R-6 thread state for this pane. The small-view instances
+        // render the thread as an overlay on the pane; the floating
+        // pop-outs hand threads to the main pane instead.
+        public long? ThreadRootSeq;
+        public long ThreadRootId;
+        public MessageDto? ThreadRoot;
+        public List<MessageDto> ThreadReplies = new();
+        public bool ThreadFollowed, ThreadHasOlder;
+        public string ThreadDraft = "";
+        public string? ThreadError;
+        public ElementReference ThreadListEl;
         // R-7 inline edit state for this pane.
         public MessageDto? Editing;
         public string EditText = "";
@@ -13432,6 +13981,7 @@ else
     private async Task ToggleMembers()
     {
         _showMembers = !_showMembers;
+        if (_showMembers) { _threadRootSeq = null; _threadRoot = null; _threadReplies = new(); }
         if (_showMembers && _open is not null)
             _members = await Api.MembersAsync(_open.Id);
     }
@@ -13744,20 +14294,316 @@ else
         StateHasChanged();
     }
 
+    // ---- R-6 threads ----
+    // A thread opens by root seq: the thread endpoint is the source of
+    // truth (a list's root row may be stale, and a deleted root comes
+    // back as null while its replies remain).
+    private async Task OpenThread(MessageDto root)
+    {
+        if (_open is not null) await OpenThreadBySeq(_open, root.Seq);
+    }
+
+    private async Task OpenThreadBySeq(ChannelDto channel, long rootSeq)
+    {
+        if (_open is null || _open.Id != channel.Id) await OpenChannel(channel);
+        _showMembers = false;
+        _threadRootSeq = rootSeq;
+        _threadError = null;
+        _threadEditing = null;
+        var t = await Api.ThreadAsync(channel.Id, rootSeq);
+        if (t is null) { _threadRootSeq = null; StateHasChanged(); return; }
+        _threadRootId = t.RootId;
+        _threadRoot = t.Root;
+        _threadReplies = t.Replies;
+        _threadFollowed = t.FollowedByMe;
+        _threadHasOlder = t.Replies.Count == 50;
+        _threadDraft = await JS.InvokeAsync<string>("atrium.loadThreadDraft", t.RootId);
+        if (_threadReplies.Count > 0)
+            await Api.MarkThreadReadAsync(channel.Id, rootSeq, _threadReplies[^1].Seq);
+        var chip = _messages.FirstOrDefault(x => x.Seq == rootSeq);
+        if (chip is not null) { chip.HasUnreadReplies = false; chip.FollowedByMe = _threadFollowed; }
+        StateHasChanged();
+        await JS.InvokeVoidAsync("atrium.scrollToBottom", _threadListEl);
+    }
+
+    private void CloseThread()
+    {
+        _threadRootSeq = null; _threadRoot = null; _threadReplies = new();
+        _threadEditing = null; _threadError = null;
+        StateHasChanged();
+    }
+
+    private async Task LoadOlderThread()
+    {
+        if (_open is null || _threadRootSeq is null || _threadReplies.Count == 0) return;
+        var t = await Api.ThreadAsync(_open.Id, _threadRootSeq.Value, _threadReplies[0].Seq);
+        if (t is null) return;
+        _threadReplies = t.Replies.Concat(_threadReplies).ToList();
+        _threadHasOlder = t.Replies.Count == 50;
+        StateHasChanged();
+    }
+
+    private async Task ToggleThreadFollow()
+    {
+        if (_open is null || _threadRootSeq is null) return;
+        if (_threadFollowed) await Api.UnfollowThreadAsync(_open.Id, _threadRootSeq.Value);
+        else await Api.FollowThreadAsync(_open.Id, _threadRootSeq.Value);
+        _threadFollowed = !_threadFollowed;
+        var chip = _messages.FirstOrDefault(x => x.Seq == _threadRootSeq.Value);
+        if (chip is not null) chip.FollowedByMe = _threadFollowed;
+        StateHasChanged();
+    }
+
+    private async Task OnThreadDraftInput(ChangeEventArgs e)
+    {
+        _threadDraft = e.Value?.ToString() ?? "";
+        await JS.InvokeVoidAsync("atrium.saveThreadDraft", _threadRootId, _threadDraft);
+    }
+
+    private async Task ThreadComposerKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey) await SendThreadReply();
+    }
+
+    private async Task SendThreadReply()
+    {
+        if (_open is null || _threadRootSeq is null) return;
+        var body = _threadDraft;
+        if (string.IsNullOrWhiteSpace(body)) return;
+        _threadError = null;
+        _threadDraft = "";
+        await JS.InvokeVoidAsync("atrium.clearThreadDraft", _threadRootId);
+        StateHasChanged();
+        var (message, error) = await Api.SendAsync(_open.Id, body, Guid.NewGuid(), null, _threadRootId);
+        if (error is not null)
+        {
+            _threadError = error;
+            _threadDraft = body;
+            await JS.InvokeVoidAsync("atrium.saveThreadDraft", _threadRootId, body);
+        }
+        StateHasChanged();
+    }
+
+    private void StartThreadEdit(MessageDto m)
+    {
+        _threadEditing = m; _threadEditText = m.Body; _threadEditError = null;
+        StateHasChanged();
+    }
+
+    private async Task SaveThreadEdit()
+    {
+        if (_threadEditing is null || _open is null) return;
+        var (dto, error) = await Api.EditMessageAsync(_open.Id, _threadEditing.Seq, _threadEditText);
+        if (error is not null) { _threadEditError = error; StateHasChanged(); return; }
+        if (dto is not null) ApplyEdited(_open.Id, dto);
+        _threadEditing = null; _threadEditError = null;
+        StateHasChanged();
+    }
+
+    private async Task DeleteThreadMessage(MessageDto m)
+    {
+        if (_open is null) return;
+        var error = await Api.DeleteMessageAsync(_open.Id, m.Seq);
+        _threadConfirmDeleteSeq = 0;
+        if (error is not null) { _threadError = error; StateHasChanged(); return; }
+        ApplyDeleted(_open.Id, m.Seq);
+        StateHasChanged();
+    }
+
+    // Instances: the thread renders as an overlay on the instance's pane.
+    private async Task OpenThreadInInstance(Instance inst, MessageDto root) =>
+        await OpenThreadInInstanceBySeq(inst, root.Seq);
+
+    private async Task OpenThreadInInstanceBySeq(Instance inst, long rootSeq)
+    {
+        var p = inst.P;
+        var t = await Api.ThreadAsync(p.Channel.Id, rootSeq);
+        if (t is null) return;
+        p.ThreadRootSeq = rootSeq;
+        p.ThreadRootId = t.RootId;
+        p.ThreadRoot = t.Root;
+        p.ThreadReplies = t.Replies;
+        p.ThreadFollowed = t.FollowedByMe;
+        p.ThreadHasOlder = t.Replies.Count == 50;
+        p.ThreadDraft = await JS.InvokeAsync<string>("atrium.loadThreadDraft", t.RootId);
+        p.ThreadError = null;
+        if (p.ThreadReplies.Count > 0)
+            await Api.MarkThreadReadAsync(p.Channel.Id, rootSeq, p.ThreadReplies[^1].Seq);
+        var chip = p.Messages.FirstOrDefault(x => x.Seq == rootSeq);
+        if (chip is not null) { chip.HasUnreadReplies = false; chip.FollowedByMe = p.ThreadFollowed; }
+        StateHasChanged();
+        await JS.InvokeVoidAsync("atrium.scrollToBottom", p.ThreadListEl);
+    }
+
+    private void CloseInstanceThread(Popout p)
+    {
+        p.ThreadRootSeq = null; p.ThreadRoot = null; p.ThreadReplies = new();
+        p.ThreadError = null;
+        StateHasChanged();
+    }
+
+    private async Task LoadOlderThread(Popout p)
+    {
+        if (p.ThreadRootSeq is null || p.ThreadReplies.Count == 0) return;
+        var t = await Api.ThreadAsync(p.Channel.Id, p.ThreadRootSeq.Value, p.ThreadReplies[0].Seq);
+        if (t is null) return;
+        p.ThreadReplies = t.Replies.Concat(p.ThreadReplies).ToList();
+        p.ThreadHasOlder = t.Replies.Count == 50;
+        StateHasChanged();
+    }
+
+    private async Task ToggleThreadFollow(Popout p)
+    {
+        if (p.ThreadRootSeq is null) return;
+        if (p.ThreadFollowed) await Api.UnfollowThreadAsync(p.Channel.Id, p.ThreadRootSeq.Value);
+        else await Api.FollowThreadAsync(p.Channel.Id, p.ThreadRootSeq.Value);
+        p.ThreadFollowed = !p.ThreadFollowed;
+        var chip = p.Messages.FirstOrDefault(x => x.Seq == p.ThreadRootSeq.Value);
+        if (chip is not null) chip.FollowedByMe = p.ThreadFollowed;
+        StateHasChanged();
+    }
+
+    private async Task ThreadDraftPopout(Popout p, ChangeEventArgs e)
+    {
+        p.ThreadDraft = e.Value?.ToString() ?? "";
+        await JS.InvokeVoidAsync("atrium.saveThreadDraft", p.ThreadRootId, p.ThreadDraft);
+    }
+
+    private async Task ThreadKeyPopout(KeyboardEventArgs e, Popout p)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey) await SendThreadReply(p);
+    }
+
+    private async Task SendThreadReply(Popout p)
+    {
+        if (p.ThreadRootSeq is null) return;
+        var body = p.ThreadDraft;
+        if (string.IsNullOrWhiteSpace(body)) return;
+        p.ThreadError = null;
+        p.ThreadDraft = "";
+        await JS.InvokeVoidAsync("atrium.clearThreadDraft", p.ThreadRootId);
+        StateHasChanged();
+        var (message, error) = await Api.SendAsync(p.Channel.Id, body, Guid.NewGuid(), null, p.ThreadRootId);
+        if (error is not null)
+        {
+            p.ThreadError = error;
+            p.ThreadDraft = body;
+            await JS.InvokeVoidAsync("atrium.saveThreadDraft", p.ThreadRootId, body);
+        }
+        StateHasChanged();
+    }
+
+    // A floating pop-out is a satellite of the main window: its threads
+    // open in the main pane.
+    private async Task OpenThreadFromPopout(Popout p, MessageDto root)
+    {
+        await OpenChannel(p.Channel);
+        await OpenThreadBySeq(p.Channel, root.Seq);
+    }
+
+    // A thread reply never joins a channel message list — those are the
+    // root stream. It bumps the root's chip wherever the root is shown
+    // and lands in any open thread view of that root.
+    private async Task OnHubThreadReply(long channelId, MessageDto dto)
+    {
+        var rootId = dto.ParentId!.Value;
+        void Bump(List<MessageDto> list)
+        {
+            var root = list.FirstOrDefault(x => x.Id == rootId);
+            if (root is null) return;
+            root.ReplyCount++;
+            root.LastReplyAt = dto.CreatedAt;
+            if (dto.Username != _me?.Username) root.HasUnreadReplies = true;
+        }
+        if (_open is not null && _open.Id == channelId)
+        {
+            Bump(_messages);
+            if (_threadRootSeq is not null && _threadRootId == rootId)
+            {
+                if (_threadReplies.All(x => x.Seq != dto.Seq)) _threadReplies.Add(dto);
+                await Api.MarkThreadReadAsync(channelId, _threadRootSeq.Value, dto.Seq);
+                var chip = _messages.FirstOrDefault(x => x.Id == rootId);
+                if (chip is not null) chip.HasUnreadReplies = false;
+                StateHasChanged();
+                await JS.InvokeVoidAsync("atrium.scrollIfNearBottom", _threadListEl);
+            }
+        }
+        foreach (var p in _popouts)
+            if (p.Channel.Id == channelId) Bump(p.Messages);
+        foreach (var inst in _instances)
+        {
+            var p = inst.P;
+            if (p.Channel.Id != channelId) continue;
+            Bump(p.Messages);
+            if (p.ThreadRootSeq is not null && p.ThreadRootId == rootId)
+            {
+                if (p.ThreadReplies.All(x => x.Seq != dto.Seq)) p.ThreadReplies.Add(dto);
+                await Api.MarkThreadReadAsync(channelId, p.ThreadRootSeq.Value, dto.Seq);
+                var chip = p.Messages.FirstOrDefault(x => x.Id == rootId);
+                if (chip is not null) chip.HasUnreadReplies = false;
+                StateHasChanged();
+                await JS.InvokeVoidAsync("atrium.scrollIfNearBottom", p.ThreadListEl);
+            }
+        }
+        StateHasChanged();
+    }
+
     // Live updates: an edit or delete lands in every list showing the
     // message — the main pane, the floating pop-outs, the instances.
     private void ApplyEdited(long channelId, MessageDto dto)
     {
-        if (_open is not null && _open.Id == channelId) ReplaceMessage(_messages, dto);
+        if (_open is not null && _open.Id == channelId)
+        {
+            ReplaceMessage(_messages, dto);
+            ReplaceMessage(_threadReplies, dto);
+            if (_threadRoot is not null && _threadRoot.Seq == dto.Seq) _threadRoot = dto;
+        }
         foreach (var p in _popouts) if (p.Channel.Id == channelId) ReplaceMessage(p.Messages, dto);
-        foreach (var inst in _instances) if (inst.P.Channel.Id == channelId) ReplaceMessage(inst.P.Messages, dto);
+        foreach (var inst in _instances)
+        {
+            if (inst.P.Channel.Id != channelId) continue;
+            ReplaceMessage(inst.P.Messages, dto);
+            ReplaceMessage(inst.P.ThreadReplies, dto);
+            if (inst.P.ThreadRoot is not null && inst.P.ThreadRoot.Seq == dto.Seq) inst.P.ThreadRoot = dto;
+        }
     }
 
     private void ApplyDeleted(long channelId, long seq)
     {
-        if (_open is not null && _open.Id == channelId) MarkDeleted(_messages, seq);
+        // If the deleted message was a reply showing in an open thread,
+        // its root's chip count drops wherever the root is shown.
+        long? parentId = null;
+        foreach (var r in _threadReplies) if (r.Seq == seq) parentId = r.ParentId;
+        foreach (var inst in _instances)
+            foreach (var r in inst.P.ThreadReplies) if (r.Seq == seq) parentId = r.ParentId;
+        if (_open is not null && _open.Id == channelId)
+        {
+            MarkDeleted(_messages, seq);
+            MarkDeleted(_threadReplies, seq);
+            // The root of an open thread was deleted: the pane stays,
+            // the root simply stops rendering — no marker, per the
+            // invisible-deletion rule.
+            if (_threadRootSeq == seq) _threadRoot = null;
+        }
         foreach (var p in _popouts) if (p.Channel.Id == channelId) MarkDeleted(p.Messages, seq);
-        foreach (var inst in _instances) if (inst.P.Channel.Id == channelId) MarkDeleted(inst.P.Messages, seq);
+        foreach (var inst in _instances)
+        {
+            if (inst.P.Channel.Id != channelId) continue;
+            MarkDeleted(inst.P.Messages, seq);
+            MarkDeleted(inst.P.ThreadReplies, seq);
+            if (inst.P.ThreadRootSeq == seq) inst.P.ThreadRoot = null;
+        }
+        if (parentId is long pid)
+        {
+            void Drop(List<MessageDto> list)
+            {
+                var root = list.FirstOrDefault(x => x.Id == pid);
+                if (root is not null && root.ReplyCount > 0) root.ReplyCount--;
+            }
+            if (_open is not null && _open.Id == channelId) Drop(_messages);
+            foreach (var p in _popouts) if (p.Channel.Id == channelId) Drop(p.Messages);
+            foreach (var inst in _instances) if (inst.P.Channel.Id == channelId) Drop(inst.P.Messages);
+        }
     }
 
     private static void ReplaceMessage(List<MessageDto> list, MessageDto dto)
@@ -14487,6 +15333,13 @@ else
             ch = _channels.FirstOrDefault(c => c.Id == r.ChannelId);
         }
         if (ch is null) return;
+        if (r.ParentId is not null && r.RootSeq is not null)
+        {
+            await OpenThreadBySeq(ch, r.RootSeq.Value);
+            _highlightMessageId = r.MessageId;
+            StateHasChanged();
+            return;
+        }
         await OpenChannelAtMessage(ch, r);
     }
 
@@ -14500,6 +15353,7 @@ else
     {
         _open = channel;
         _sendError = "";
+        _threadRootSeq = null; _threadRoot = null; _threadReplies = new();
         _highlightMessageId = null;
         _viewingOlder = true;
         _uploadTarget = null;
@@ -14537,16 +15391,23 @@ else
         await JS.InvokeVoidAsync("atrium.scrollToBottom", _listEl);
     }
 
-    private static string NotifText(NotificationDto n) => n.Kind switch
+    private static string NotifText(NotificationDto n)
     {
-        "dm" => $"{n.ActorDisplayName} sent you a direct message",
-        "channel" => $"{n.ActorDisplayName} posted in #{n.ChannelName}",
-        "mention" => $"{n.ActorDisplayName} mentioned you in #{n.ChannelName}",
-        "added" => $"{n.ActorDisplayName} added you to #{n.ChannelName}",
-        "online" => $"{n.ActorDisplayName} is back online",
-        "alert" => "System alert",
-        _ => n.ActorDisplayName
-    };
+        if (n.Target is not null && n.Target.StartsWith("thread:"))
+            return n.Kind == "mention"
+                ? $"{n.ActorDisplayName} mentioned you in a thread in #{n.ChannelName}"
+                : $"{n.ActorDisplayName} replied in a thread in #{n.ChannelName}";
+        return n.Kind switch
+        {
+            "dm" => $"{n.ActorDisplayName} sent you a direct message",
+            "channel" => $"{n.ActorDisplayName} posted in #{n.ChannelName}",
+            "mention" => $"{n.ActorDisplayName} mentioned you in #{n.ChannelName}",
+            "added" => $"{n.ActorDisplayName} added you to #{n.ChannelName}",
+            "online" => $"{n.ActorDisplayName} is back online",
+            "alert" => "System alert",
+            _ => n.ActorDisplayName
+        };
+    }
 
     private static string FmtWhen(DateTimeOffset t)
     {
@@ -14592,6 +15453,30 @@ else
             // on the Resources or Health tab the condition came from.
             Nav.NavigateTo($"/admin?tab={n.Target ?? "resources"}");
             return;
+        }
+        if (n.Target is not null && n.Target.StartsWith("thread:") && n.ChannelId is not null)
+        {
+            var parts = n.Target.Split(':');
+            if (parts.Length == 3 && long.TryParse(parts[2], out var rootSeq))
+            {
+                var ch2 = _channels.FirstOrDefault(c => c.Id == n.ChannelId.Value);
+                if (ch2 is null)
+                {
+                    await LoadChannels();
+                    ch2 = _channels.FirstOrDefault(c => c.Id == n.ChannelId.Value);
+                }
+                if (ch2 is not null)
+                {
+                    if (inst is not null && _viewMode == "pop")
+                    {
+                        await OpenInInstance(inst, ch2);
+                        await OpenThreadInInstanceBySeq(inst, rootSeq);
+                    }
+                    else await OpenThreadBySeq(ch2, rootSeq);
+                }
+                StateHasChanged();
+                return;
+            }
         }
         if (n.ChannelId is not null)
         {
@@ -14766,6 +15651,7 @@ else
     {
         _open = channel;
         _sendError = "";
+        _threadRootSeq = null; _threadRoot = null; _threadReplies = new();
         _pendingUploads.Clear();
         _highlightMessageId = null;
         _viewingOlder = false;
@@ -14828,15 +15714,16 @@ else
 
     public async Task OnHubMessage(long channelId, MessageDto dto)
     {
+        if (dto.ParentId is not null) await OnHubThreadReply(channelId, dto);
         var pop = _popouts.FirstOrDefault(x => x.Channel.Id == channelId);
-        if (pop is not null && pop.Messages.All(x => x.Seq != dto.Seq))
+        if (dto.ParentId is null && pop is not null && pop.Messages.All(x => x.Seq != dto.Seq))
         {
             pop.Messages.Add(dto);
             await Api.MarkReadAsync(channelId, dto.Seq);
         }
         foreach (var inst in _instances)
         {
-            if (inst.P.Channel.Id == channelId && inst.P.Messages.All(x => x.Seq != dto.Seq))
+            if (dto.ParentId is null && inst.P.Channel.Id == channelId && inst.P.Messages.All(x => x.Seq != dto.Seq))
             {
                 inst.P.Messages.Add(dto);
                 await Api.MarkReadAsync(channelId, dto.Seq);
@@ -14844,7 +15731,7 @@ else
                 await JS.InvokeVoidAsync("atrium.scrollIfNearBottom", inst.P.ListEl);
             }
         }
-        if (_viewMode != "pop" && _open is not null && _open.Id == channelId)
+        if (dto.ParentId is null && _viewMode != "pop" && _open is not null && _open.Id == channelId)
         {
             if (_messages.All(x => x.Seq != dto.Seq))
             {
@@ -15146,7 +16033,7 @@ else
         }
     }
 
-    // The full view's default size (spec, Nov 17, 2026): every
+    // The full view's default size (Brandon's spec, Nov 17, 2026): every
     // picture is normalized against the viewer frame from its own stored
     // dimensions — scaled down or up so its constraining dimension lands
     // on 75% of the frame, aspect preserved. Nothing fills the whole frame
@@ -15190,7 +16077,7 @@ else
         await MeasureViewerFrameAsync();
     }
 
-    // Rail drag callbacks (JS pointer path, atrium.railDrag —
+    // Rail drag callbacks (JS pointer path, atrium.railDrag — Brandon's
     // spec, Nov 17, 2026: the left gallery sidebar is width-adjustable
     // and widening it enlarges its thumbnails). The drag runs in JS for
     // smoothness (pointer capture, the rail's inline width follows the
@@ -15222,7 +16109,7 @@ else
     }
 
     // The wheel's job in the viewer depends on where the pointer is
-    // (zone rule, spec, Nov 17, 2026 — this refines the earlier
+    // (zone rule, Brandon's spec, Nov 17, 2026 — this refines the earlier
     // wheel-cycling spec rather than replacing it):
     //   - Over the main picture itself: the wheel zooms SMOOTHLY — the
     //     target multiplier moves multiplicatively with the accumulated
@@ -15249,7 +16136,7 @@ else
         if (e.DeltaY > 0) LightboxNext(); else LightboxPrev();
     }
 
-    // Smooth wheel zoom (spec, Nov 17, 2026 — replaces the
+    // Smooth wheel zoom (Brandon's spec, Nov 17, 2026 — replaces the
     // stepped wheel zoom of the same day: fixed 0.5 steps behind a
     // 250 ms lockout felt alternately too fast and too slow, because a
     // notch meant 50% at the fit but only 12.5% near the cap, and the
@@ -15279,14 +16166,14 @@ else
     }
 
     // ---- full view sidebar: flat / grouped / calendar rail modes ----
-    // Spec, Nov 17, 2026. Everything derives from _lightbox at
+    // Brandon's spec, Nov 17, 2026. Everything derives from _lightbox at
     // render — the same list the slideshow runs off — so SignalR arrivals
     // (which refresh _lightbox in place) update the rail, the groups, and
     // the calendar dots with no extra plumbing. A photo's date is its sent
     // date in the viewer's local time (the image list's CreatedAt, the
     // attachment row written by the send pipeline). Grouped mode groups by
     // month only: week grouping (standalone and nested) was removed
-    // Nov 17, 2026 by design direction — the week view was judged
+    // Nov 17, 2026 at Brandon's direction — he judged the week view
     // useless; month grouping and the calendar were retained.
 
     private sealed record LbGroup(string Key, string Label, List<ChannelImageDto> Items);

@@ -10,8 +10,8 @@
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10">
   <img src="https://img.shields.io/badge/PostgreSQL-17.4-336791" alt="PostgreSQL 17.4">
   <img src="https://img.shields.io/badge/Platform-Windows%20Server%20%2B%20IIS-0078D6" alt="Windows Server + IIS">
-  <img src="https://img.shields.io/badge/Current%20build-261118__1820-5b8cff" alt="Current build 261118_1820">
-  <img src="https://img.shields.io/badge/Schema-v14-5b8cff" alt="Schema v14">
+  <img src="https://img.shields.io/badge/Current%20build-261118__2104-5b8cff" alt="Current build 261118_2104">
+  <img src="https://img.shields.io/badge/Schema-v15-5b8cff" alt="Schema v15">
   <img src="https://img.shields.io/badge/Status-early%20alpha%20—%20not%20for%20production-red" alt="Status: early alpha, not for production">
 </p>
 
@@ -93,6 +93,7 @@ Before a Build run passes its redistributable check, the operator records the SH
 - Live delivery over SignalR with persisted history (keyset pagination) and full-text search
 - Message edit/delete with global defaults and per-user / per-channel overrides (resolution: per-user > per-channel > global). Deletions are invisible to everyone; the record is retained on the back end (append-only edit history + audit rows)
 - Per-channel drafts stored on the device; spell check in the composer
+- Threads: one-level replies scoped to a parent message, with explicit follow state, per-thread read positions, and action-center notifications; deleting a thread root leaves its replies readable, with no marker
 
 **Presence and notifications**
 - Presence is **computed at read time, never stored** — Online (connected, active within 5 min), Away (connected, idle past 5 min), Offline (disconnected). A connection whose client has not checked in for 150 seconds reads Offline even with a live socket
@@ -127,7 +128,7 @@ Core flows are verified with automated browser and API test batteries against a 
 
 ## Roadmap
 
-In planned order: threads · general (non-image) file uploads · data export · voice/video calls (LiveKit) · Boards. Webhooks only if a concrete consumer appears.
+In planned order: general (non-image) file uploads · data export · voice/video calls (LiveKit) · Boards. Webhooks only if a concrete consumer appears.
 
 Each roadmap item, verification task, and known defect is tracked as an issue in this repository — the issue tracker is the canonical status for open work.
 
