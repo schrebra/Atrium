@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10">
   <img src="https://img.shields.io/badge/PostgreSQL-17.4-336791" alt="PostgreSQL 17.4">
   <img src="https://img.shields.io/badge/Platform-Windows%20Server%20%2B%20IIS-0078D6" alt="Windows Server + IIS">
-  <img src="https://img.shields.io/badge/Current%20build-261118__2133-5b8cff" alt="Current build 261119_0539">
+  <img src="https://img.shields.io/badge/Current%20build-261118__2133-5b8cff" alt="Current build 261119_0546">
   <img src="https://img.shields.io/badge/Schema-v15-5b8cff" alt="Schema v15">
   <img src="https://img.shields.io/badge/Status-early%20alpha%20—%20not%20for%20production-red" alt="Status: early alpha, not for production">
 </p>
@@ -35,7 +35,7 @@ What is true today:
 
 Atrium is a Mattermost-class internal chat system built to run entirely on a local network for roughly 3,000 users. It is written in C# on .NET 10: an ASP.NET Core server hosted on IIS, a PostgreSQL database, and a Blazor WebAssembly client delivered in a thin WebView2 desktop shell.
 
-The entire system ships as **one self-contained file** — `261119_0539_Install-Atrium.ps1`. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
+The entire system ships as **one self-contained file** — `261119_0546_Install-Atrium.ps1`. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
 
 ## Screenshots
 
@@ -72,14 +72,14 @@ The entire system ships as **one self-contained file** — `261119_0539_Install-
 Build:
 
 ```powershell
-.\261119_0539_Install-Atrium.ps1 -Mode Build             # emit, compile, and package
-.\261119_0539_Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
+.\261119_0546_Install-Atrium.ps1 -Mode Build             # emit, compile, and package
+.\261119_0546_Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
 ```
 
 Deploy:
 
 ```powershell
-.\261119_0539_Install-Atrium.ps1 -Mode Deploy
+.\261119_0546_Install-Atrium.ps1 -Mode Deploy
 ```
 
 Before a Build run passes its redistributable check, the operator records the SHA-256 hashes of the actual redistributable installers in the installer config. The shipped values are empty by design, so an unverified redistributable cannot slip through.
@@ -141,7 +141,7 @@ Each roadmap item, verification task, and known defect is tracked as an issue in
 ## Repository layout
 
 ```
-261119_0539_Install-Atrium.ps1   the installer — the entire system, embedded
+261119_0546_Install-Atrium.ps1   the installer — the entire system, embedded
 README.md            this file
 vision.md            why Atrium exists
 doctrine.md          the principles it is built under, incl. the PROVE loop
