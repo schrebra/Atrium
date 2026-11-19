@@ -99,6 +99,14 @@ names, seed admin, AD settings, SMTP relay, and the SHA-256 slots). Lab and
 production are two saved copies of the script with different values — there is
 no separate configuration system to learn or secure.
 
+> **Directed change (Nov 19, 2026 — issue #35):** configuration is moving out
+> of the script into a separate, fully commented config file next to it, so an
+> operator never has to edit a script. Every setting will carry a comment
+> (purpose, effect, recommendation, and sizing guidance by deployment tier),
+> and an unmodified config is an unskippable gate: the launcher opens it in an
+> editor and refuses to proceed until the must-change values are set. Until
+> that lands, the model above is what the current build does.
+
 **Before your first Build**, record the SHA-256 of each of your redist files
 in its config slot:
 
@@ -114,7 +122,12 @@ GitHub Actions fills them in its own copy from the files it downloads.
 
 **Prerequisites**
 
-- Windows Server (2022 or later recommended), administrator access
+- Windows Server, administrator access. **Verified version: Windows Server
+  2022** — GitHub Actions runs the full Build, both runtime batteries, and a
+  lab-mode Deploy on Server 2022 for every build. Windows Server 2025 is
+  expected to work but is not yet CI-verified. Server 2019 and earlier are not
+  verified targets; Deploy's Stage 0 asserts a Windows Server OS and fails on
+  anything else, but only 2022 carries a verification claim.
 - PowerShell 7 (`pwsh`) — Deploy asserts this in its first stage and fails
   loudly under Windows PowerShell 5.1. (A 5.1 bootstrap launcher that installs
   the bundled PowerShell 7 automatically is planned — issue #34.)
@@ -290,6 +303,21 @@ destroys the existing deployment — IIS, the database and all its data, and
 the certificate — and builds from scratch. Retention promises apply *within*
 a deployment's lifetime, between rebuilds. Never run Deploy against a server
 whose data you have not first preserved.
+
+**There is no in-place upgrade mode, by decision** (Nov 19, 2026). An
+in-place upgrade was considered in detail and rejected: schema migrations
+across several years of releases are a stair-step — every intermediate
+version's changes applied in order, any one of which can fail halfway — and
+PostgreSQL adds a hard boundary of its own, because a backup taken on one
+major version cannot always be restored directly onto a server many major
+versions newer. The upgrade path is therefore always the same: preserve the
+database and attachments, run a fresh Deploy of the new build, restore. The
+installer pins the PostgreSQL major version together with the application, so
+a years-old backup is restored onto its matching major version first rather
+than jumped across several in one step. Rebuild + restore is not the fallback
+option; it is the recommended one, because it proves the new install end to
+end every time and leaves the old system untouched until the new one is
+verified.
 
 **What protects data day to day**
 
