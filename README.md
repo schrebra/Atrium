@@ -138,6 +138,7 @@ Each roadmap item, verification task, and known defect is tracked as an issue in
 
 ## Project documents
 
+- [admin-guide.md](admin-guide.md) — how to install, configure, and administer an Atrium server: the installer, the admin console, Group Policy, Active Directory, backup and restore
 - [vision.md](vision.md) — why Atrium exists, what it is, and what it will not become
 - [doctrine.md](doctrine.md) — the principles the project is built under, including the PROVE loop (Prepare, Risk, Operate, Verify, Evaluate)
 - [goals.md](goals.md) — current state, roadmap, verification backlog, and open items
