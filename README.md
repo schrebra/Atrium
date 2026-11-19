@@ -31,8 +31,8 @@
 What is true today:
 
 - The chat core and admin console are implemented and pass automated browser/API test batteries against a Linux-hosted demo stack (including a Samba AD test harness for the Kerberos paths).
-- There is **no production deployment**. The full Windows build, the end-to-end Deploy run, the desktop shell installer, and mail delivery to Exchange are lab-phase items, verified by construction only so far.
-- Installs are total rebuilds by design: running the installer destroys the previous deployment and all its data. There is no upgrade path and no data migration between builds.
+- There is **no production deployment** yet. The full Windows build, the shell MSI, the runtime batteries, and a lab-mode end-to-end Deploy are verified in GitHub Actions on every push; Deploy on a production-like server, GPO shell rollout, and mail delivery to Exchange remain lab-phase items.
+- **Upgrades are a rebuild plus a restore, by design.** Moving to a new build works like this: take a verified backup of the database and the attachment store, run the new installer — it builds a completely fresh deployment from scratch, with nothing of the old installation carried over — then restore the backup into it. Accounts, channels, the full message history, and every setting come back from the restore. There is deliberately no in-place upgrade and no migration chain: a version is never upgraded *through* other versions, so there is no accumulated drift and no half-applied migration state to recover from. And the rebuild only ever runs after the backup exists and has been verified.
 - Expect breaking changes, rough edges, and missing features (see [goals.md](goals.md) for the roadmap and the verification backlog).
 
 ## Overview
@@ -63,7 +63,7 @@ The entire system ships as **one self-contained file** — `261119_1415_Install-
 ## Operating model
 
 - **PowerShell-only delivery.** No Git-based deployment, no code signing. The installer is copied to the target and run.
-- **Total-rebuild bootstrap.** Every installer run destroys the previous deployment — IIS site, database and all data, and the certificate — and builds from scratch. It is an install/rebuild tool, not an upgrade tool. Message retention is indefinite *within* a deployment's lifetime between rebuilds.
+- **Total-rebuild bootstrap, with restore as the upgrade path.** Every installer run builds the deployment from scratch — IIS site, database, and certificate — rather than modifying what is already there. That is deliberate: an installation that can be rebuilt from nothing is an installation you understand completely, and one you can prove works before it carries anything. Your data is not part of the rebuild. Upgrading means backing up the database and the attachment store, running the new build's installer, and restoring into the fresh deployment — the database comes back exactly as it was, because the schema and the PostgreSQL major version are pinned together with the application, so data never needs migrating between builds. Message retention is indefinite *within* a deployment's lifetime, and across deployments for exactly as long as you keep the backups.
 - **Free components only.** No paid dependencies anywhere in the stack.
 - **Fail loud.** Pins are verified exactly, exit codes are checked after every native call, and a failed step stops the run with a named cause. "Probably worked" is treated as failed.
 
