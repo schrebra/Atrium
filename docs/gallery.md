@@ -1,6 +1,6 @@
 # Screenshot gallery
 
-Atrium at build 261118_1820 — every screen at a glance. Click any thumbnail for the full-size image. [Back to the README](../README.md)
+Atrium — every screen at a glance. The threads view is at build 261118_2119; the other screens are at build 261118_1820, unchanged in those areas. Click any thumbnail for the full-size image. [Back to the README](../README.md)
 
 ## Client
 
@@ -17,7 +17,7 @@ Atrium at build 261118_1820 — every screen at a glance. Click any thumbnail fo
   </tr>
   <tr>
     <td align="center"><a href="images/small-views.png"><img src="images/small-views.png" width="250" alt="Small-view instances"></a><br><b>Pop-out instances</b><br>Identical small views, no cap</td>
-    <td></td>
+    <td align="center"><a href="images/threads.png"><img src="images/threads.png" width="250" alt="Threads"></a><br><b>Threads</b><br>One-level replies, follow state, read positions</td>
     <td></td>
   </tr>
 </table>
