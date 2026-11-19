@@ -1,17 +1,32 @@
 name: Build check and release
 
-# Every push to main runs the installer's FULL Windows build
-# (-Mode Build: emit, compile, shell MSI, bundle) on a Windows runner
-# with the exact pinned toolchain (SDK 10.0.100, WiX 7.0.1). When the
-# build passes, the release job publishes a GitHub Release for the
-# build stamp if one does not exist yet, with the installer attached.
+# Every push to main verifies Atrium end to end on GitHub-hosted
+# runners (free for public repositories):
+#
+#   build            The installer's FULL Windows build (-Mode Build:
+#                    emit, compile, shell MSI, bundle) on a Windows
+#                    runner with the exact pinned toolchain (SDK
+#                    10.0.100, WiX 7.0.1), an MSI install/uninstall
+#                    check, and the bundle kept as a workflow artifact.
+#   release          Publishes a GitHub Release for the build stamp
+#                    if one does not exist yet, installer attached.
+#   runtime-windows  Installs PostgreSQL 17 on a Windows runner,
+#                    publishes and starts the server, and runs the API
+#                    battery (tests/api-battery.py) against it.
+#   runtime-linux    The same API battery on Ubuntu against a
+#                    PostgreSQL 17 service, plus the headless-Chrome
+#                    UI battery (tests/ui-battery.js).
+#   deploy-windows   The full build, then the installer's Deploy mode
+#                    with -LabMode (self-signed certificate, local
+#                    archive folders) on the Windows Server runner:
+#                    IIS site, PostgreSQL, and the built-in smoke test.
 #
 # The repo copy of the installer keeps its redistributable SHA-256
 # slots empty on purpose (issue #8: the operator records the hashes of
-# THEIR redist files). The CI job downloads the three redistributables,
-# fills the slots in its own checked-out copy with the hashes of the
-# files it downloaded, and builds that copy. The release ships the
-# pristine repo installer, never the CI copy or the CI bundle.
+# THEIR redist files). CI jobs download the three redistributables,
+# fill the slots in their own checked-out copy with the hashes of the
+# files they downloaded, and build that copy. The release ships the
+# pristine repo installer, never a CI copy or the CI bundle.
 
 on:
   push:
@@ -113,6 +128,37 @@ jobs:
           if (-not (Test-Path 'Atrium-Bundle/payload/shell/Atrium.msi')) { throw 'Shell MSI missing from the bundle.' }
           Write-Host 'Bundle contents:'
           Get-ChildItem -Recurse Atrium-Bundle | ForEach-Object { $_.FullName }
+      - name: Install and uninstall the shell MSI
+        shell: pwsh
+        run: |
+          $msi = Join-Path $PWD 'Atrium-Bundle\payload\shell\Atrium.msi'
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "MSI install failed with exit code $($p.ExitCode)." }
+          if (-not (Test-Path 'C:\Program Files\Atrium\Atrium.exe')) { throw 'Atrium.exe not found after the MSI install.' }
+          Write-Host 'MSI installed; Atrium.exe present under Program Files.'
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "MSI uninstall failed with exit code $($p.ExitCode)." }
+          if (Test-Path 'C:\Program Files\Atrium\Atrium.exe') { throw 'Atrium.exe still present after the MSI uninstall.' }
+          Write-Host 'MSI uninstalled cleanly.'
+      - name: Upload the bundle as an artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atrium-bundle-${{ steps.inst.outputs.stamp }}
+          path: Atrium-Bundle
+          if-no-files-found: error
+      - name: Copy the installer run log for upload
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path run-logs -Force | Out-Null
+          Copy-Item (Join-Path $env:TEMP 'Atrium-Logs\*') run-logs -ErrorAction SilentlyContinue
+      - name: Upload the installer run log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-log-${{ steps.inst.outputs.stamp }}
+          path: run-logs
+          if-no-files-found: warn
       - name: Post the build log tail to issue #7 on failure
         if: failure()
         shell: pwsh
@@ -159,3 +205,309 @@ jobs:
           bundle manifest verification.
           EOF
           gh release create "$tag" "$INSTALLER" --title "Atrium build $STAMP (early alpha)" --notes-file notes.md --prerelease
+
+  runtime-windows:
+    name: Windows runtime smoke test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install the pinned .NET SDK (10.0.100)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $PWD '.dotnet'
+          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
+          .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
+          "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Locate the installer
+        id: inst
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
+          "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Emit the sources
+        shell: pwsh
+        run: |
+          & ./${{ steps.inst.outputs.file }} -Mode Build -EmitOnly -BundlePath (Join-Path $PWD 'ci-bundle') -WorkRoot (Join-Path $PWD 'ci-work')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install PostgreSQL 17
+        shell: pwsh
+        run: |
+          Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'pg-installer.exe'
+          $p = Start-Process '.\pg-installer.exe' -ArgumentList '--mode', 'unattended', '--unattendedmodeui', 'none', '--superpassword', 'CiSuper!2026', '--serverport', '5433', '--servicename', 'postgresql-ci' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "PostgreSQL installer failed with exit code $($p.ExitCode)." }
+          $pgBin = 'C:\Program Files\PostgreSQL\17\bin'
+          if (-not (Test-Path (Join-Path $pgBin 'psql.exe'))) { throw 'psql.exe not found after the PostgreSQL install.' }
+          $env:PGPASSWORD = 'CiSuper!2026'
+          $ready = $false
+          for ($i = 0; $i -lt 30 -and -not $ready; $i++) {
+            & (Join-Path $pgBin 'pg_isready.exe') -h 127.0.0.1 -p 5433 | Out-Null
+            $ready = ($LASTEXITCODE -eq 0)
+            if (-not $ready) { Start-Sleep -Seconds 3 }
+          }
+          if (-not $ready) { throw 'PostgreSQL did not become ready.' }
+          & (Join-Path $pgBin 'psql.exe') -h 127.0.0.1 -p 5433 -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE atrium_app LOGIN PASSWORD 'smokeapp';" -c 'CREATE DATABASE atrium OWNER atrium_app;'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host 'PostgreSQL ready on 5433; role and database created.'
+      - name: Publish the server and client, merge the client wwwroot
+        shell: pwsh
+        run: |
+          $src = Join-Path $PWD 'ci-work\src'
+          dotnet publish (Join-Path $src 'Server\Atrium.Server.csproj') -c Release -o app -p:RestoreLockedMode=true --nologo -v q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish (Join-Path $src 'Client\Atrium.Client.csproj') -c Release -o client-publish -p:RestoreLockedMode=true --nologo -v q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Same per-file merge the installer's B1 performs, including
+          # the long-path normalization for the relative-path math.
+          $clientWww = (Get-Item (Join-Path $PWD 'client-publish\wwwroot')).FullName
+          $serverWww = Join-Path $PWD 'app\wwwroot'
+          Get-ChildItem -Path $clientWww -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Substring($clientWww.Length).TrimStart('\', '/')
+            $destFile = Join-Path $serverWww $rel
+            $destDir = Split-Path $destFile -Parent
+            if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+            Copy-Item -Path $_.FullName -Destination $destFile -Force
+          }
+          if (-not (Test-Path (Join-Path $serverWww 'index.html'))) { throw 'Client wwwroot merge failed: app\wwwroot\index.html missing.' }
+          Write-Host 'Published and merged.'
+      - name: Apply the schema
+        shell: pwsh
+        run: |
+          $env:PGPASSWORD = 'smokeapp'
+          & 'C:\Program Files\PostgreSQL\17\bin\psql.exe' -h 127.0.0.1 -p 5433 -U atrium_app -d atrium -v ON_ERROR_STOP=1 -f (Join-Path $PWD 'ci-work\schema.sql')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Start the server and wait for health
+        shell: pwsh
+        run: |
+          $env:ASPNETCORE_URLS = 'http://127.0.0.1:5080'
+          $env:ConnectionStrings__Atrium = 'Host=127.0.0.1;Port=5433;Database=atrium;Username=atrium_app;Password=smokeapp'
+          $env:Atrium__KeyRingPath = Join-Path $PWD 'keyring'
+          $env:Atrium__SeedAdminUser = 'admin'
+          $env:Atrium__SeedAdminPassword = 'ChangeMe!2026'
+          $env:Atrium__SchemaVersion = '15'
+          $env:Atrium__MinShellVersion = '0.1.0'
+          $env:Atrium__WalArchivePath = Join-Path $PWD 'wal-archive'
+          $proc = Start-Process dotnet -ArgumentList (Join-Path $PWD 'app\Atrium.Server.dll') -WorkingDirectory (Join-Path $PWD 'app') -RedirectStandardOutput (Join-Path $PWD 'server-out.log') -RedirectStandardError (Join-Path $PWD 'server-err.log') -PassThru
+          "SERVER_PID=$($proc.Id)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $ok = $false
+          for ($i = 0; $i -lt 40 -and -not $ok; $i++) {
+            try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:5080/health' -TimeoutSec 3; $ok = ($r.status -eq 'ok') } catch { Start-Sleep -Seconds 2 }
+          }
+          if (-not $ok) { Get-Content (Join-Path $PWD 'server-err.log') -Tail 60; throw 'Server did not report healthy on /health.' }
+          Write-Host 'Server healthy.'
+      - name: Seed the test data
+        shell: pwsh
+        env:
+          PSQL: 'C:\Program Files\PostgreSQL\17\bin\psql.exe'
+          PGHOST: '127.0.0.1'
+          PGPORT: '5433'
+          PGUSER: 'postgres'
+          PGPASSWORD: 'CiSuper!2026'
+          PGDATABASE: 'atrium'
+        run: |
+          python tests/seed-ci.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run the API battery
+        shell: pwsh
+        env:
+          ATRIUM_BASE: 'http://127.0.0.1:5080'
+        run: |
+          python tests/api-battery.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload the server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-windows-server-logs
+          path: |
+            server-out.log
+            server-err.log
+          if-no-files-found: warn
+
+  runtime-linux:
+    name: Linux runtime batteries
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: CiSuper!2026
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install the pinned .NET SDK (10.0.100)
+        run: |
+          curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh
+          bash dotnet-install.sh --version 10.0.100 --install-dir "$PWD/.dotnet"
+          echo "DOTNET_ROOT=$PWD/.dotnet" >> "$GITHUB_ENV"
+          echo "$PWD/.dotnet" >> "$GITHUB_PATH"
+      - name: Locate the installer
+        id: inst
+        run: |
+          f=$(ls *_Install-Atrium.ps1 | sort -r | head -1)
+          if [ -z "$f" ]; then echo 'No *_Install-Atrium.ps1 at the repo root.'; exit 1; fi
+          echo "file=$f" >> "$GITHUB_OUTPUT"
+      - name: Emit the sources
+        run: |
+          pwsh -NoProfile -File "./${{ steps.inst.outputs.file }}" -Mode Build -EmitOnly -BundlePath "$PWD/ci-bundle" -WorkRoot "$PWD/ci-work"
+      - name: Install the PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client > /dev/null
+          psql --version
+      - name: Create the app role and database
+        env:
+          PGPASSWORD: CiSuper!2026
+        run: |
+          psql -h 127.0.0.1 -p 5432 -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE atrium_app LOGIN PASSWORD 'smokeapp';" -c 'CREATE DATABASE atrium OWNER atrium_app;'
+      - name: Publish the server and client, merge the client wwwroot
+        run: |
+          dotnet publish ci-work/src/Server/Atrium.Server.csproj -c Release -o app -p:RestoreLockedMode=true --nologo -v q
+          dotnet publish ci-work/src/Client/Atrium.Client.csproj -c Release -o client-publish -p:RestoreLockedMode=true --nologo -v q
+          mkdir -p app/wwwroot
+          cp -r client-publish/wwwroot/. app/wwwroot/
+          test -f app/wwwroot/index.html
+      - name: Apply the schema
+        env:
+          PGPASSWORD: smokeapp
+        run: |
+          psql -h 127.0.0.1 -p 5432 -U atrium_app -d atrium -v ON_ERROR_STOP=1 -f ci-work/schema.sql
+      - name: Start the server and wait for health
+        env:
+          ASPNETCORE_URLS: 'http://127.0.0.1:5080'
+          ConnectionStrings__Atrium: 'Host=127.0.0.1;Port=5432;Database=atrium;Username=atrium_app;Password=smokeapp'
+          Atrium__SeedAdminUser: 'admin'
+          Atrium__SeedAdminPassword: 'ChangeMe!2026'
+          Atrium__SchemaVersion: '15'
+          Atrium__MinShellVersion: '0.1.0'
+        run: |
+          export Atrium__KeyRingPath="$PWD/keyring"
+          export Atrium__WalArchivePath="$PWD/wal-archive"
+          (cd app && nohup dotnet Atrium.Server.dll > ../server.log 2>&1 &)
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -s http://127.0.0.1:5080/health | grep -q '"ok"'; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != 1 ]; then tail -60 server.log; echo 'Server did not report healthy on /health.'; exit 1; fi
+          echo 'Server healthy.'
+      - name: Seed the test data
+        env:
+          PGHOST: '127.0.0.1'
+          PGPORT: '5432'
+          PGUSER: 'postgres'
+          PGPASSWORD: CiSuper!2026
+          PGDATABASE: 'atrium'
+        run: python3 tests/seed-ci.py
+      - name: Run the API battery
+        env:
+          ATRIUM_BASE: 'http://127.0.0.1:5080'
+        run: python3 tests/api-battery.py
+      - name: Install Chrome for Testing and the UI battery dependencies
+        run: |
+          curl -sSL -o chrome.zip 'https://storage.googleapis.com/chrome-for-testing-public/131.0.6778.204/linux64/chrome-linux64.zip'
+          unzip -q chrome.zip
+          npm --prefix tests install --no-audit --no-fund
+      - name: Run the UI battery
+        env:
+          ATRIUM_BASE: 'http://127.0.0.1:5080'
+          CHROME_PATH: '${{ github.workspace }}/chrome-linux64/chrome'
+          SHOTS_DIR: '${{ github.workspace }}/shots'
+        run: |
+          mkdir -p shots
+          node tests/ui-battery.js
+      - name: Upload the server log and UI screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-linux-logs
+          path: |
+            server.log
+            shots
+          if-no-files-found: warn
+
+  deploy-windows:
+    name: Deploy smoke test (lab mode)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install the pinned .NET SDK (10.0.100)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $PWD '.dotnet'
+          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
+          .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
+          "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Install WiX (pinned 7.0.1)
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 7.0.1
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Locate the installer
+        id: inst
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
+          "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Download the redistributables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path redist -Force | Out-Null
+          Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'redist/postgresql-17.4-windows-x64.exe'
+          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.0/dotnet-hosting-10.0.0-win.exe' -OutFile 'redist/dotnet-hosting-10.0.0-win.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+      - name: Fill the redist hash slots in the CI copy
+        shell: pwsh
+        run: |
+          $path = '${{ steps.inst.outputs.file }}'
+          $text = [IO.File]::ReadAllText($path)
+          $map = [ordered]@{
+            PgInstallerSha256       = 'redist/postgresql-17.4-windows-x64.exe'
+            HostingBundleSha256     = 'redist/dotnet-hosting-10.0.0-win.exe'
+            WebView2InstallerSha256 = 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+          }
+          foreach ($k in $map.Keys) {
+            $hash = (Get-FileHash $map[$k] -Algorithm SHA256).Hash
+            $pattern = "(?m)^(\s*$k\s*=\s*)''"
+            if ($text -notmatch $pattern) { throw "Hash slot $k not found in the installer config." }
+            $text = $text -replace $pattern, "`$1'$hash'"
+          }
+          [IO.File]::WriteAllText($path, $text)
+      - name: Run the full build (produces the bundle Deploy consumes)
+        shell: pwsh
+        run: |
+          & ./${{ steps.inst.outputs.file }} -Mode Build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'Atrium-Bundle/manifest.json')) { throw 'Bundle manifest missing.' }
+      - name: Map the Atrium host name to this machine
+        shell: pwsh
+        run: |
+          Add-Content -Path 'C:\Windows\System32\drivers\etc\hosts' -Value "`n127.0.0.1 atrium"
+          Write-Host 'hosts entry added for atrium.'
+      - name: Run Deploy in lab mode
+        shell: pwsh
+        run: |
+          & ./${{ steps.inst.outputs.file }} -Mode Deploy -LabMode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Copy the deploy run log for upload
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path deploy-logs -Force | Out-Null
+          Copy-Item 'C:\Atrium-Logs\*' deploy-logs -ErrorAction SilentlyContinue
+      - name: Upload the deploy run log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deploy-log
+          path: deploy-logs
+          if-no-files-found: warn
