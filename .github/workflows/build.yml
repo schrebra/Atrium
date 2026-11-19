@@ -132,9 +132,18 @@ jobs:
         shell: pwsh
         run: |
           $msi = Join-Path $PWD 'Atrium-Bundle\payload\shell\Atrium.msi'
-          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+          $msiLog = Join-Path $env:TEMP 'atrium-msi-install.log'
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$msiLog`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "MSI install failed with exit code $($p.ExitCode)." }
-          if (-not (Test-Path 'C:\Program Files\Atrium\Atrium.exe')) { throw 'Atrium.exe not found after the MSI install.' }
+          if (-not (Test-Path 'C:\Program Files\Atrium\Atrium.exe')) {
+            # Diagnose before failing: where did the files go, and
+            # what does the verbose installer log say about them?
+            Write-Host 'Atrium.exe is not at the expected path. Searching the usual install roots:'
+            Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)', "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'Atrium.exe' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+            Write-Host '--- msiexec verbose log: Atrium.exe / INSTALLFOLDER / Return value 3 lines:'
+            Select-String -Path $msiLog -Pattern 'Atrium\.exe|INSTALLFOLDER|Return value 3' | Select-Object -Last 80 | ForEach-Object { $_.Line }
+            throw 'Atrium.exe not found after the MSI install.'
+          }
           Write-Host 'MSI installed; Atrium.exe present under Program Files.'
           $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "MSI uninstall failed with exit code $($p.ExitCode)." }
@@ -234,11 +243,24 @@ jobs:
       - name: Install PostgreSQL 17
         shell: pwsh
         run: |
+          # The runner image may already carry a PostgreSQL 17 install.
+          # The EDB installer then upgrades it in place and ignores the
+          # --servicename/--serverport parameters below, leaving
+          # nothing listening on 5433 (first hit: run 44552697443).
+          # Remove any existing install first so the parameters hold.
+          $existing = 'C:\Program Files\PostgreSQL\17\uninstall-postgresql.exe'
+          if (Test-Path $existing) {
+            Get-Service | Where-Object { $_.Name -like 'postgres*' } | Stop-Service -Force -ErrorAction SilentlyContinue
+            $u = Start-Process $existing -ArgumentList '--mode', 'unattended' -Wait -PassThru
+            Write-Host "Existing PostgreSQL uninstaller exit code: $($u.ExitCode)"
+            Remove-Item 'C:\Program Files\PostgreSQL\17' -Recurse -Force -ErrorAction SilentlyContinue
+          }
           Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'pg-installer.exe'
           $p = Start-Process '.\pg-installer.exe' -ArgumentList '--mode', 'unattended', '--unattendedmodeui', 'none', '--superpassword', 'CiSuper!2026', '--serverport', '5433', '--servicename', 'postgresql-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "PostgreSQL installer failed with exit code $($p.ExitCode)." }
           $pgBin = 'C:\Program Files\PostgreSQL\17\bin'
           if (-not (Test-Path (Join-Path $pgBin 'psql.exe'))) { throw 'psql.exe not found after the PostgreSQL install.' }
+          Start-Service 'postgresql-ci' -ErrorAction SilentlyContinue
           $env:PGPASSWORD = 'CiSuper!2026'
           $ready = $false
           for ($i = 0; $i -lt 30 -and -not $ready; $i++) {
@@ -246,7 +268,15 @@ jobs:
             $ready = ($LASTEXITCODE -eq 0)
             if (-not $ready) { Start-Sleep -Seconds 3 }
           }
-          if (-not $ready) { throw 'PostgreSQL did not become ready.' }
+          if (-not $ready) {
+            Write-Host 'PostgreSQL services:'
+            Get-Service | Where-Object { $_.Name -like 'postgres*' } | Format-Table Name, Status -AutoSize | Out-String | Write-Host
+            Write-Host 'Listeners on 5432/5433:'
+            netstat -ano | Select-String ':5432|:5433'
+            $pgLogDir = 'C:\Program Files\PostgreSQL\17\data\log'
+            if (Test-Path $pgLogDir) { Get-ChildItem $pgLogDir -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | ForEach-Object { Get-Content $_.FullName -Tail 40 } }
+            throw 'PostgreSQL did not become ready.'
+          }
           & (Join-Path $pgBin 'psql.exe') -h 127.0.0.1 -p 5433 -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE atrium_app LOGIN PASSWORD 'smokeapp';" -c 'CREATE DATABASE atrium OWNER atrium_app;'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host 'PostgreSQL ready on 5433; role and database created.'
