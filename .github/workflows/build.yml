@@ -67,7 +67,7 @@ jobs:
         id: inst
         shell: pwsh
         run: |
-          $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Select-Object -First 1
+          $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
           "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "stamp=$($f.Name -replace '_Install-Atrium\.ps1$','')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
