@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -112,6 +113,21 @@ jobs:
           if (-not (Test-Path 'Atrium-Bundle/payload/shell/Atrium.msi')) { throw 'Shell MSI missing from the bundle.' }
           Write-Host 'Bundle contents:'
           Get-ChildItem -Recurse Atrium-Bundle | ForEach-Object { $_.FullName }
+      - name: Post the build log tail to issue #7 on failure
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $log = Get-ChildItem (Join-Path $env:TEMP 'Atrium-Logs') -Filter '*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+          $body = Join-Path $PWD 'build-failure.md'
+          if ($log) {
+            $tail = (Get-Content $log.FullName -Tail 120) -join "`n"
+            @("Build check failed for commit $env:GITHUB_SHA (run $env:GITHUB_RUN_ID). Last lines of the installer run log ($($log.Name)):", '', '```', $tail, '```') | Set-Content $body
+          } else {
+            @("Build check failed for commit $env:GITHUB_SHA (run $env:GITHUB_RUN_ID). No installer run log was found under TEMP\Atrium-Logs.") | Set-Content $body
+          }
+          gh issue comment 7 --body-file $body
 
   release:
     name: Publish the installer release
