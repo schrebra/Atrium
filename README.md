@@ -31,7 +31,7 @@
 What is true today:
 
 - The chat core and admin console are implemented and pass automated browser/API test batteries against a Linux-hosted demo stack (including a Samba AD test harness for the Kerberos paths).
-- There is **no production deployment** yet. The full Windows build, the shell MSI, the runtime batteries, and a lab-mode end-to-end Deploy are verified in GitHub Actions on every push; Deploy on a production-like server, GPO shell rollout, and mail delivery to Exchange remain lab-phase items.
+- There is **no production deployment** yet. The full Windows build, the shell MSI, the runtime batteries, and a lab-mode end-to-end Deploy are verified in GitHub Actions on every push; Deploy on a production-like server, Group Policy deployment of the shell MSI, and mail delivery to Exchange remain lab-phase items.
 - **Upgrades are a rebuild plus a restore, by design.** Moving to a new build works like this: take a verified backup of the database and the attachment store, run the new installer — it builds a completely fresh deployment from scratch, with nothing of the old installation carried over — then restore the backup into it. Accounts, channels, the full message history, and every setting come back from the restore. There is deliberately no in-place upgrade and no migration chain: a version is never upgraded *through* other versions, so there is no accumulated drift and no half-applied migration state to recover from. And the rebuild only ever runs after the backup exists and has been verified.
 - Expect breaking changes, rough edges, and missing features (see [goals.md](goals.md) for the roadmap and the verification backlog).
 
