@@ -1,6 +1,6 @@
 # Goals
 
-Where Atrium stands, what is still needed, and in what order. Current state: **build 261119_0710**, database schema v15.
+Where Atrium stands, what is still needed, and in what order. Current state: **build 261119_0739**, database schema v15.
 
 **Status: early alpha — not for production use.** No production deployment exists; see the README's Project status section.
 
@@ -26,6 +26,7 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 2. **Data export (R-8).** An operator export tool for channel history and audit data.
 3. **Voice/video calls (R-10).** LiveKit SFU. Planning basis: 20 rooms, 30 participants in the largest room (a configuration cap), 150 aggregate publishers. Placement of the LiveKit service (its own Linux VM vs. the main server) is decided when this attaches.
 4. **Boards (R-11).** Kanban-style boards, in scope from the original design. Playbooks are explicitly out.
+5. **Group Policy templates (ADMX/ADML).** Administrative templates so domain administrators can manage the server and the desktop shell through Group Policy, matching the GPO-only endpoint deployment model. Policies map onto the configuration surfaces that already exist (installer config for the server, shell settings for the client); where a policy and a local/console setting both exist, policy wins. Tracked as issue #15.
 
 **Conditional:** webhooks (R-9) — only if a concrete consumer appears. Nothing is built speculatively.
 
@@ -33,9 +34,10 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 
 These are built and verified by construction or on substitute harnesses; each needs its real-environment pass before Atrium is called production-ready:
 
-- [ ] Full `-Mode Build` on the Windows build machine (the build's exact SDK/WiX pins stop it anywhere else, by design)
-- [ ] `-Mode Deploy` end to end on the lab Windows Server VM
-- [ ] WPF desktop shell build and WiX MSI packaging, GPO deployment of the shell
+- [x] Full `-Mode Build` — verified in GitHub Actions on a Windows Server runner (Nov 19, 2026, run 44549850253) and on every push since; the exact SDK/WiX pins are enforced there
+- [ ] `-Mode Deploy` end to end on the lab Windows Server VM (a lab-mode Deploy smoke test runs in GitHub Actions; the real-environment pass is still required)
+- [x] WPF desktop shell build and WiX MSI packaging — verified in GitHub Actions (Nov 19, 2026)
+- [ ] GPO deployment of the shell
 - [ ] Kerberos/AD sync against real Windows Active Directory at ~3,000-user scale (verified so far against a Samba AD DC harness)
 - [ ] SMTP alert delivery to on-prem Exchange (delivery is by construction; the sandbox used for development cannot send mail)
 - [ ] Capacity spikes: LiveKit room load, WebView2 shell behaviors, keyset scrollback against a ~22M-row message table

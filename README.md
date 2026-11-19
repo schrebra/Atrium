@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10">
   <img src="https://img.shields.io/badge/PostgreSQL-17.4-336791" alt="PostgreSQL 17.4">
   <img src="https://img.shields.io/badge/Platform-Windows%20Server%20%2B%20IIS-0078D6" alt="Windows Server + IIS">
-  <img src="https://img.shields.io/badge/Current%20build-261118__2133-5b8cff" alt="Current build 261119_0710">
+  <img src="https://img.shields.io/badge/Current%20build-261118__2133-5b8cff" alt="Current build 261119_0739">
   <img src="https://img.shields.io/badge/Schema-v15-5b8cff" alt="Schema v15">
   <img src="https://img.shields.io/badge/Status-early%20alpha%20—%20not%20for%20production-red" alt="Status: early alpha, not for production">
 </p>
@@ -35,7 +35,7 @@ What is true today:
 
 Atrium is a Mattermost-class internal chat system built to run entirely on a local network for roughly 3,000 users. It is written in C# on .NET 10: an ASP.NET Core server hosted on IIS, a PostgreSQL database, and a Blazor WebAssembly client delivered in a thin WebView2 desktop shell.
 
-The entire system ships as **one self-contained file** — `261119_0710_Install-Atrium.ps1`. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
+The entire system ships as **one self-contained file** — `261119_0739_Install-Atrium.ps1`. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
 
 ## Screenshots
 
@@ -72,14 +72,14 @@ The entire system ships as **one self-contained file** — `261119_0710_Install-
 Build:
 
 ```powershell
-.\261119_0710_Install-Atrium.ps1 -Mode Build             # emit, compile, and package
-.\261119_0710_Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
+.\261119_0739_Install-Atrium.ps1 -Mode Build             # emit, compile, and package
+.\261119_0739_Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
 ```
 
 Deploy:
 
 ```powershell
-.\261119_0710_Install-Atrium.ps1 -Mode Deploy
+.\261119_0739_Install-Atrium.ps1 -Mode Deploy
 ```
 
 Before a Build run passes its redistributable check, the operator records the SHA-256 hashes of the actual redistributable installers in the installer config. The shipped values are empty by design, so an unverified redistributable cannot slip through.
@@ -124,11 +124,11 @@ These are design decisions, not omissions:
 
 ## Verification status
 
-Core flows are verified with automated browser and API test batteries against a Linux-hosted demo stack, including a Samba AD DC harness for the Kerberos and sync paths. Still lab-phase (verified by construction only): the WPF shell build and WiX MSI packaging, Deploy mode end to end on Windows Server, and SMTP alert delivery to Exchange.
+Core flows are verified with automated browser and API test batteries against a Linux-hosted demo stack, including a Samba AD DC harness for the Kerberos and sync paths. Since Nov 19, 2026, GitHub Actions also verifies every push on real Windows Server and Linux runners: the full `-Mode Build` (pinned SDK and WiX, bundle assembly, manifest verification), the shell MSI build, live-server API batteries on both operating systems, and the UI battery on Linux. Still lab-phase: Deploy mode end to end on a production-like Windows Server (a lab-mode Deploy smoke test runs in CI), GPO deployment of the shell, and SMTP alert delivery to Exchange.
 
 ## Roadmap
 
-In planned order: general (non-image) file uploads · data export · voice/video calls (LiveKit) · Boards. Webhooks only if a concrete consumer appears.
+In planned order: general (non-image) file uploads · data export · voice/video calls (LiveKit) · Boards · Group Policy templates (ADMX/ADML). Webhooks only if a concrete consumer appears.
 
 Each roadmap item, verification task, and known defect is tracked as an issue in this repository — the issue tracker is the canonical status for open work.
 
@@ -141,7 +141,7 @@ Each roadmap item, verification task, and known defect is tracked as an issue in
 ## Repository layout
 
 ```
-261119_0710_Install-Atrium.ps1   the installer — the entire system, embedded
+261119_0739_Install-Atrium.ps1   the installer — the entire system, embedded
 README.md            this file
 vision.md            why Atrium exists
 doctrine.md          the principles it is built under, incl. the PROVE loop
