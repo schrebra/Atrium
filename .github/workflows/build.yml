@@ -62,7 +62,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path redist -Force | Out-Null
           Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'redist/postgresql-17.4-windows-x64.exe'
-          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/Hosting/10.0.0/dotnet-hosting-10.0.0-win.exe' -OutFile 'redist/dotnet-hosting-10.0.0-win.exe'
+          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.0/dotnet-hosting-10.0.0-win.exe' -OutFile 'redist/dotnet-hosting-10.0.0-win.exe'
           Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
           Get-ChildItem redist | Select-Object Name, Length
       - name: Fill the redist hash slots in the CI copy
