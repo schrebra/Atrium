@@ -128,7 +128,7 @@ These are design decisions, not omissions:
 
 ## Verification status
 
-Core flows are verified with automated browser and API test batteries against a Linux-hosted demo stack, including a Samba AD DC harness for the Kerberos and sync paths. Since Nov 19, 2026, GitHub Actions also verifies every push on real Windows Server and Linux runners: the full `-Mode Build` (pinned SDK and WiX, bundle assembly, manifest verification), the shell MSI build, live-server API batteries on both operating systems, and the UI battery on Linux. Still lab-phase: Deploy mode end to end on a production-like Windows Server (a lab-mode Deploy smoke test runs in CI), GPO deployment of the shell, and SMTP alert delivery to Exchange.
+Core flows are verified with automated browser and API test batteries against a Linux-hosted demo stack, including a Samba AD DC harness for the Kerberos and sync paths. Since Nov 19, 2026, GitHub Actions also verifies every push on real Windows Server and Linux runners: the full `-Mode Build` (pinned SDK and WiX, bundle assembly, manifest verification), the shell MSI build, live-server API batteries on both operating systems, and the UI battery on Linux, and a full lab-mode `-Mode Deploy` (all six stages, including the end-to-end smoke test) on a Windows Server runner. Still lab-phase: Deploy mode on a production-like Windows Server with real AD CS enrollment, GPO deployment of the shell, and SMTP alert delivery to Exchange.
 
 ## Roadmap
 

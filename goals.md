@@ -38,7 +38,7 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 These are built and verified by construction or on substitute harnesses; each needs its real-environment pass before Atrium is called production-ready:
 
 - [x] Full `-Mode Build` — verified in GitHub Actions on a Windows Server runner (Nov 19, 2026, run 44549850253) and on every push since; the exact SDK/WiX pins are enforced there
-- [ ] `-Mode Deploy` end to end on the lab Windows Server VM (a lab-mode Deploy smoke test runs in GitHub Actions; the real-environment pass is still required)
+- [ ] `-Mode Deploy` end to end on the lab Windows Server VM (the lab-mode Deploy passes in GitHub Actions as of build 261119_1415, Nov 19, 2026 — all six stages including the smoke test; the real-environment pass is still required)
 - [x] WPF desktop shell build and WiX MSI packaging — verified in GitHub Actions (Nov 19, 2026)
 - [ ] GPO deployment of the shell
 - [ ] Kerberos/AD sync against real Windows Active Directory at ~3,000-user scale (verified so far against a Samba AD DC harness)
