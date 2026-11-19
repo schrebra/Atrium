@@ -1,6 +1,6 @@
 # Goals
 
-Where Atrium stands, what is still needed, and in what order. Current state: **build 261119_0759**, database schema v15.
+Where Atrium stands, what is still needed, and in what order. Current state: **build 261119_0822**, database schema v15.
 
 **Status: early alpha — not for production use.** No production deployment exists; see the README's Project status section.
 
@@ -27,8 +27,11 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 3. **Voice/video calls (R-10).** LiveKit SFU. Planning basis: 20 rooms, 30 participants in the largest room (a configuration cap), 150 aggregate publishers. Placement of the LiveKit service (its own Linux VM vs. the main server) is decided when this attaches.
 4. **Boards (R-11).** Kanban-style boards, in scope from the original design. Playbooks are explicitly out.
 5. **Group Policy templates (ADMX/ADML).** Administrative templates so domain administrators can manage the server and the desktop shell through Group Policy, matching the GPO-only endpoint deployment model. Policies map onto the configuration surfaces that already exist (installer config for the server, shell settings for the client); where a policy and a local/console setting both exist, policy wins. Tracked as issue #15.
+6. **Automated off-site backup and restore, plus settings/configuration export.** Scheduled base backups with retention to an off-site target (WAL archiving already exists; recurring base backups and pruning do not), an operator-facing restore from base backup + WAL replay, backup health through the existing alerting routes, and a single portable export of all settings and configuration (distinct from the R-8 data export). Tracked as issue #16.
 
 **Conditional:** webhooks (R-9) — only if a concrete consumer appears. Nothing is built speculatively.
+
+**Under consideration (not adopted):** high availability with live failover across up to 3 servers (issue #17, raised Nov 19, 2026). Adopting it would supersede the single-VM topology ruling and remove "clustering / multi-node deployment" from the not-planned list below; until Brandon decides, both stand as written.
 
 ## Verification backlog (lab phase)
 
