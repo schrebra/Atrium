@@ -31,7 +31,7 @@
 What is true today:
 
 - The chat core and admin console are implemented and pass automated browser/API test batteries against a Linux-hosted demo stack (including a Samba AD test harness for the Kerberos paths).
-- There is **no production deployment** yet. The full Windows build, the shell MSI, the runtime batteries, and a lab-mode end-to-end Deploy are verified in GitHub Actions on every push; Deploy on a production-like server, Group Policy deployment of the shell MSI, and mail delivery to Exchange remain lab-phase items.
+- There is **no production deployment** yet. The full Windows build, the shell MSI, the runtime batteries, and a lab-mode end-to-end Deploy are verified in GitHub Actions on every push; Deploy on a production-like server and mail delivery to Exchange remain lab-phase items.
 - **Upgrades are a rebuild plus a restore, by design.** Moving to a new build works like this: take a verified backup of the database and the attachment store, run the new installer — it builds a completely fresh deployment from scratch, with nothing of the old installation carried over — then restore the backup into it. Accounts, channels, the full message history, and every setting come back from the restore. There is deliberately no in-place upgrade and no migration chain: a version is never upgraded *through* other versions, so there is no accumulated drift and no half-applied migration state to recover from. And the rebuild only ever runs after the backup exists and has been verified.
 - Expect breaking changes, rough edges, and missing features (see [goals.md](goals.md) for the roadmap and the verification backlog).
 
@@ -53,7 +53,7 @@ The entire system ships as **one self-contained file** — `261119_1415_Install-
 |---|---|---|
 | Server | ASP.NET Core (.NET 10) on IIS | REST API + SignalR hub; server-side sessions |
 | Client | Blazor WebAssembly, MudBlazor 9.14 | Runs in the browser or the desktop shell |
-| Desktop shell | WPF + WebView2 | Versioned MSI, deployed by GPO |
+| Desktop shell | WPF + WebView2 | Versioned MSI |
 | Database | PostgreSQL 17.4 | Full-text search via `tsvector`; WAL archiving for recovery |
 | Authentication | Local accounts + AD/Kerberos (Negotiate) | AD sync job with single-transaction diff apply |
 | Attachments | Magick.NET renditions | Scan gate (validation or Windows Defender), content-addressed store |
@@ -128,7 +128,7 @@ These are design decisions, not omissions:
 
 ## Verification status
 
-Core flows are verified with automated browser and API test batteries against a Linux-hosted demo stack, including a Samba AD DC harness for the Kerberos and sync paths. Since Nov 19, 2026, GitHub Actions also verifies every push on real Windows Server and Linux runners: the full `-Mode Build` (pinned SDK and WiX, bundle assembly, manifest verification), the shell MSI build, live-server API batteries on both operating systems, and the UI battery on Linux, and a full lab-mode `-Mode Deploy` (all six stages, including the end-to-end smoke test) on a Windows Server runner. Still lab-phase: Deploy mode on a production-like Windows Server with real AD CS enrollment, GPO deployment of the shell, and SMTP alert delivery to Exchange.
+Core flows are verified with automated browser and API test batteries against a Linux-hosted demo stack, including a Samba AD DC harness for the Kerberos and sync paths. Since Nov 19, 2026, GitHub Actions also verifies every push on real Windows Server and Linux runners: the full `-Mode Build` (pinned SDK and WiX, bundle assembly, manifest verification), the shell MSI build, live-server API batteries on both operating systems, and the UI battery on Linux, and a full lab-mode `-Mode Deploy` (all six stages, including the end-to-end smoke test) on a Windows Server runner. Still lab-phase: Deploy mode on a production-like Windows Server with real AD CS enrollment, and SMTP alert delivery to Exchange.
 
 ## Roadmap
 
