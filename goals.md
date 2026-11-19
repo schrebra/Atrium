@@ -48,7 +48,6 @@ These are built and verified by construction or on substitute harnesses; each ne
 ## Open engineering items
 
 - 11 Medium and 8 Low findings from the November 2026 code review remain open (all Critical and High findings are fixed). They are worked down opportunistically, highest first.
-- The sign-in form retains the previous username and password after sign-out. Clearing both fields on sign-out is a known, small fix awaiting a decision.
 
 ## Explicitly not planned
 
