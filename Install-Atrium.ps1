@@ -47,7 +47,7 @@ $ErrorActionPreference = 'Stop'
 # ============================================================================
 $Config = @{
     ProductName      = 'Atrium'
-    BundleVersion    = '261118_2104'
+    BundleVersion    = '261118_2113'
     SchemaVersion    = 15
 
     # Deployment identity (Deploy mode, single VM)
@@ -14014,6 +14014,8 @@ else
         _loginError = "";
         if (await Api.LoginAsync(_loginUser, _loginPass))
         {
+            _loginUser = "";
+            _loginPass = "";
             _me = await Api.MeAsync();
             if (_me is not null && !_me.MustChangePassword) await AfterLogin();
         }
@@ -14055,6 +14057,14 @@ else
         _presenceCts?.Cancel();
         await Api.LogoutAsync();
         _me = null;
+        _loginUser = "";
+        _loginPass = "";
+        _loginError = "";
+        _showUserMenu = false;
+        _showViews = false;
+        _showNotifs = false;
+        _showSwitcher = false;
+        _showSearch = false;
         _channels = new();
         _open = null;
         _messages = new();

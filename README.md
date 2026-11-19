@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10">
   <img src="https://img.shields.io/badge/PostgreSQL-17.4-336791" alt="PostgreSQL 17.4">
   <img src="https://img.shields.io/badge/Platform-Windows%20Server%20%2B%20IIS-0078D6" alt="Windows Server + IIS">
-  <img src="https://img.shields.io/badge/Current%20build-261118__2104-5b8cff" alt="Current build 261118_2104">
+  <img src="https://img.shields.io/badge/Current%20build-261118__2113-5b8cff" alt="Current build 261118_2113">
   <img src="https://img.shields.io/badge/Schema-v15-5b8cff" alt="Schema v15">
   <img src="https://img.shields.io/badge/Status-early%20alpha%20—%20not%20for%20production-red" alt="Status: early alpha, not for production">
 </p>

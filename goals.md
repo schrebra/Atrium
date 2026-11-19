@@ -1,6 +1,6 @@
 # Goals
 
-Where Atrium stands, what is still needed, and in what order. Current state: **build 261118_2104**, database schema v15.
+Where Atrium stands, what is still needed, and in what order. Current state: **build 261118_2113**, database schema v15.
 
 **Status: early alpha — not for production use.** No production deployment exists; see the README's Project status section.
 
