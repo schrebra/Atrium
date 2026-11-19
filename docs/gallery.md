@@ -1,6 +1,6 @@
 # Screenshot gallery
 
-Atrium — every screen at a glance. The threads view is at build 261118_2119; the other screens are at build 261118_1820, unchanged in those areas. Click any thumbnail for the full-size image. [Back to the README](../README.md)
+Atrium — every screen at a glance. The threads view is at build 261118_2133; the other screens are at build 261118_1820, unchanged in those areas. Click any thumbnail for the full-size image. [Back to the README](../README.md)
 
 ## Client
 
