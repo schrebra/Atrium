@@ -1,0 +1,1 @@
+{"dependencies":{"puppeteer-core":"25.18.1"},"description":"CI test batteries for Atrium. puppeteer-core is pinned to the version the UI battery is verified against locally.","name":"atrium-ci-tests","private":true}
