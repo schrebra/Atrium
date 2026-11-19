@@ -307,9 +307,23 @@ jobs:
           $env:PGPASSWORD = 'smokeapp'
           & 'C:\Program Files\PostgreSQL\17\bin\psql.exe' -h 127.0.0.1 -p 5433 -U atrium_app -d atrium -v ON_ERROR_STOP=1 -f (Join-Path $PWD 'ci-work\schema.sql')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Start the server and wait for health
+      - name: Start the server, seed, and run the API battery
         shell: pwsh
+        env:
+          PSQL: 'C:\Program Files\PostgreSQL\17\bin\psql.exe'
+          PGHOST: '127.0.0.1'
+          PGPORT: '5433'
+          PGUSER: 'postgres'
+          PGPASSWORD: 'CiSuper!2026'
+          PGDATABASE: 'atrium'
+          ATRIUM_BASE: 'http://127.0.0.1:5080'
         run: |
+          # One step on purpose: the Windows runner terminates
+          # processes a step started when the step ends, so the
+          # server must be started, seeded against, and tested
+          # inside a single step. (First hit: run 44557887139 —
+          # the battery got connection-refused after a healthy
+          # start in the previous step.)
           $env:ASPNETCORE_URLS = 'http://127.0.0.1:5080'
           $env:ConnectionStrings__Atrium = 'Host=127.0.0.1;Port=5433;Database=atrium;Username=atrium_app;Password=smokeapp'
           $env:Atrium__KeyRingPath = Join-Path $PWD 'keyring'
@@ -326,23 +340,8 @@ jobs:
           }
           if (-not $ok) { Get-Content (Join-Path $PWD 'server-err.log') -Tail 60; throw 'Server did not report healthy on /health.' }
           Write-Host 'Server healthy.'
-      - name: Seed the test data
-        shell: pwsh
-        env:
-          PSQL: 'C:\Program Files\PostgreSQL\17\bin\psql.exe'
-          PGHOST: '127.0.0.1'
-          PGPORT: '5433'
-          PGUSER: 'postgres'
-          PGPASSWORD: 'CiSuper!2026'
-          PGDATABASE: 'atrium'
-        run: |
           python tests/seed-ci.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Run the API battery
-        shell: pwsh
-        env:
-          ATRIUM_BASE: 'http://127.0.0.1:5080'
-        run: |
           python tests/api-battery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload the server logs on failure
