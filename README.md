@@ -15,6 +15,10 @@
   <img src="https://img.shields.io/badge/Status-early%20alpha%20—%20not%20for%20production-red" alt="Status: early alpha, not for production">
 </p>
 
+**In plain terms:** Atrium is your organization's own chat app. Think of it as the company lobby on your computer: you walk in, sign in with your work account, and from there you can message coworkers, share pictures, and reach the other tools you need — one front door instead of a bunch of separate ones. It runs entirely on your own network, with no cloud and no internet connection required.
+
+**Why the name:** an atrium is the central room of a building — the place everyone passes through and branches off from. That is what this app is for an organization: one central place people enter, then reach everything else from.
+
 ---
 
 > [!WARNING]
