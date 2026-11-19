@@ -35,7 +35,7 @@ What is true today:
 
 Atrium is a Mattermost-class internal chat system built to run entirely on a local network for roughly 3,000 users. It is written in C# on .NET 10: an ASP.NET Core server hosted on IIS, a PostgreSQL database, and a Blazor WebAssembly client delivered in a thin WebView2 desktop shell.
 
-The entire system ships as **one self-contained file** — `Install-Atrium.ps1`. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
+The entire system ships as **one self-contained file** — `261118_2113_Install-Atrium.ps1`. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
 
 ## Screenshots
 
@@ -72,14 +72,14 @@ The entire system ships as **one self-contained file** — `Install-Atrium.ps1`.
 Build:
 
 ```powershell
-.\Install-Atrium.ps1 -Mode Build             # emit, compile, and package
-.\Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
+.\261118_2113_Install-Atrium.ps1 -Mode Build             # emit, compile, and package
+.\261118_2113_Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
 ```
 
 Deploy:
 
 ```powershell
-.\Install-Atrium.ps1 -Mode Deploy
+.\261118_2113_Install-Atrium.ps1 -Mode Deploy
 ```
 
 Before a Build run passes its redistributable check, the operator records the SHA-256 hashes of the actual redistributable installers in the installer config. The shipped values are empty by design, so an unverified redistributable cannot slip through.
@@ -141,7 +141,7 @@ Each roadmap item, verification task, and known defect is tracked as an issue in
 ## Repository layout
 
 ```
-Install-Atrium.ps1   the installer — the entire system, embedded
+261118_2113_Install-Atrium.ps1   the installer — the entire system, embedded
 README.md            this file
 vision.md            why Atrium exists
 doctrine.md          the principles it is built under, incl. the PROVE loop
