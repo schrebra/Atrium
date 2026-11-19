@@ -37,7 +37,7 @@ What is true today:
 
 ## Overview
 
-Atrium is a Mattermost-class internal chat system built to run entirely on a local network for roughly 3,000 users. It is written in C# on .NET 10: an ASP.NET Core server hosted on IIS, a PostgreSQL database, and a Blazor WebAssembly client delivered in a thin WebView2 desktop shell.
+Atrium is a Mattermost-class internal chat system built to run entirely on a local network for a single organization of any size — from a small office to thousands of users. It is written in C# on .NET 10: an ASP.NET Core server hosted on IIS, a PostgreSQL database, and a Blazor WebAssembly client delivered in a thin WebView2 desktop shell.
 
 The entire system ships as **one self-contained file** — `261119_0912_Install-Atrium.ps1`. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
 

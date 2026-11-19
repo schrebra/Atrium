@@ -2,7 +2,7 @@
 
 ## The problem
 
-An organization of ~3,000 people needs everyday team chat. The available options all give up something essential:
+An organization — a small office or thousands of people — needs everyday team chat. The available options all give up something essential:
 
 - **Cloud chat** puts internal communication on someone else's servers, behind someone else's outage schedule, pricing changes, and data policies — and stops working entirely when the internet does.
 - **Per-seat commercial products** charge rent forever for a solved problem, and gate basic controls (like who may delete a message) behind higher pricing tiers.
