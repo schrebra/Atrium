@@ -331,7 +331,7 @@ jobs:
           $env:Atrium__KeyRingPath = Join-Path $PWD 'keyring'
           $env:Atrium__SeedAdminUser = 'admin'
           $env:Atrium__SeedAdminPassword = 'ChangeMe!2026'
-          $env:Atrium__SchemaVersion = '15'
+          $env:Atrium__SchemaVersion = '16'
           $env:Atrium__MinShellVersion = '0.1.0'
           $env:Atrium__WalArchivePath = Join-Path $PWD 'wal-archive'
           $proc = Start-Process dotnet -ArgumentList (Join-Path $PWD 'app\Atrium.Server.dll') -WorkingDirectory (Join-Path $PWD 'app') -RedirectStandardOutput (Join-Path $PWD 'server-out.log') -RedirectStandardError (Join-Path $PWD 'server-err.log') -PassThru
@@ -421,7 +421,7 @@ jobs:
           ConnectionStrings__Atrium: 'Host=127.0.0.1;Port=5432;Database=atrium;Username=atrium_app;Password=smokeapp'
           Atrium__SeedAdminUser: 'admin'
           Atrium__SeedAdminPassword: 'ChangeMe!2026'
-          Atrium__SchemaVersion: '15'
+          Atrium__SchemaVersion: '16'
           Atrium__MinShellVersion: '0.1.0'
         run: |
           export Atrium__KeyRingPath="$PWD/keyring"
