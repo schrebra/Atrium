@@ -5,7 +5,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$InstallerPath,
     [Parameter(Mandatory = $true)][string]$TemplatePath,
-    [Parameter(Mandatory = $true)][string]$WorkDir
+    [Parameter(Mandatory = $true)][string]$WorkRoot
 )
 $ErrorActionPreference = 'Stop'
 $script:Failures = 0
@@ -39,14 +39,14 @@ Check 'extraction: all config functions found' ($defs.Count -eq $wantedFuncs.Cou
 Check 'extraction: template hash stamped' ($script:ConfigTemplateSha256 -match '^[0-9A-F]{64}$')
 
 # ---- Fixtures ------------------------------------------------------------
-if (Test-Path $WorkDir) { Remove-Item $WorkDir -Recurse -Force }
-New-Item -ItemType Directory -Path $WorkDir | Out-Null
+if (Test-Path $WorkRoot) { Remove-Item $WorkRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $WorkRoot | Out-Null
 $templateText = Get-Content $TemplatePath -Raw
 
-$fxTemplate = Join-Path $WorkDir 'as-shipped.psd1'
+$fxTemplate = Join-Path $WorkRoot 'as-shipped.psd1'
 Copy-Item $TemplatePath $fxTemplate
 
-$fxComplete = Join-Path $WorkDir 'complete.psd1'
+$fxComplete = Join-Path $WorkRoot 'complete.psd1'
 ($templateText -replace [regex]::Escape("HostName = '__CHANGE_ME__'"), "HostName = 'atrium'" `
                -replace [regex]::Escape("CaServer = '__CHANGE_ME__'"), "CaServer = 'ca01'" `
                -replace [regex]::Escape("WalArchivePath = '__CHANGE_ME__'"), "WalArchivePath = '\\\\backup01\atrium-wal'" `
@@ -54,24 +54,24 @@ $fxComplete = Join-Path $WorkDir 'complete.psd1'
                -replace [regex]::Escape("SeedAdminPassword = '__CHANGE_ME__'"), "SeedAdminPassword = 'Str0ng!Pass'") |
     Set-Content $fxComplete -NoNewline
 
-$fxHalf = Join-Path $WorkDir 'half.psd1'
+$fxHalf = Join-Path $WorkRoot 'half.psd1'
 ($templateText -replace [regex]::Escape("HostName = '__CHANGE_ME__'"), "HostName = 'atrium'" `
                -replace [regex]::Escape("SeedAdminPassword = '__CHANGE_ME__'"), "SeedAdminPassword = 'Str0ng!Pass'") |
     Set-Content $fxHalf -NoNewline
 
-$fxUnknown = Join-Path $WorkDir 'unknown-key.psd1'
+$fxUnknown = Join-Path $WorkRoot 'unknown-key.psd1'
 ($templateText -replace "    DeploymentTier = 'Small'", "    DeploymentTier = 'Small'`n    TypoSetting = 'x'") | Set-Content $fxUnknown -NoNewline
 
-$fxMissing = Join-Path $WorkDir 'missing-key.psd1'
-($templateText -replace "    PgPort = 5432`n", '') | Set-Content $fxMissing -NoNewline
+$fxMissing = Join-Path $WorkRoot 'missing-key.psd1'
+[regex]::Replace($templateText, '(?m)^\s*PgPort = 5432\r?\n', '') | Set-Content $fxMissing -NoNewline
 
-$fxType = Join-Path $WorkDir 'wrong-type.psd1'
+$fxType = Join-Path $WorkRoot 'wrong-type.psd1'
 ($templateText -replace "    HttpsPort = 443", "    HttpsPort = 'abc'") | Set-Content $fxType -NoNewline
 
-$fxMalformed = Join-Path $WorkDir 'malformed.psd1'
+$fxMalformed = Join-Path $WorkRoot 'malformed.psd1'
 "@{ HostName = " | Set-Content $fxMalformed -NoNewline
 
-$fxAd = Join-Path $WorkDir 'ad-on.psd1'
+$fxAd = Join-Path $WorkRoot 'ad-on.psd1'
 (Get-Content $fxComplete -Raw) -replace 'AdEnabled = \$false', 'AdEnabled = $true' | Set-Content $fxAd -NoNewline
 
 # ---- Loader / validation -------------------------------------------------
@@ -101,7 +101,7 @@ $mAd = @(Get-MissingConfigValues -Cfg (Read-AtriumConfig -Path $fxAd) -Lab $fals
 Check 'AD on with empty AD settings = 5 AD misses' ($mAd.Count -eq 5) ($mAd -join '; ')
 
 $threw = $null
-try { Read-AtriumConfig -Path (Join-Path $WorkDir 'does-not-exist.psd1') | Out-Null } catch { $threw = $_.Exception.Message }
+try { Read-AtriumConfig -Path (Join-Path $WorkRoot 'does-not-exist.psd1') | Out-Null } catch { $threw = $_.Exception.Message }
 Check 'missing file fails loud' ($null -ne $threw -and $threw -match 'not found') "got: $threw"
 
 # ---- Summary masking -------------------------------------------------------
@@ -139,7 +139,7 @@ $gateResult = Invoke-ConfigGate -Path $fxComplete -Lab $false -Unattended $true
 Check 'gate unattended + complete config passes through' ($gateResult.HostName -eq 'atrium')
 
 # ---- Gate loop with a fake editor (child process; Read-Host fed by stdin) ---
-$driver = Join-Path $WorkDir 'gate-driver.ps1'
+$driver = Join-Path $WorkRoot 'gate-driver.ps1'
 @'
 param([string]$InstallerPath, [string]$FixturePath, [string]$CallsPath)
 $tokens = $null; $errors = $null
@@ -165,9 +165,9 @@ $cfg = Invoke-ConfigGate -Path $FixturePath -Lab $false -Unattended $false
 Write-Host "GATE RETURNED HostName=$($cfg.HostName) SeedAdminPassword=$($cfg.SeedAdminPassword)"
 '@ | Set-Content $driver
 
-$gateFixture = Join-Path $WorkDir 'gate-fixture.psd1'
+$gateFixture = Join-Path $WorkRoot 'gate-fixture.psd1'
 Copy-Item $TemplatePath $gateFixture
-$callsFile = Join-Path $WorkDir 'editor-calls.txt'
+$callsFile = Join-Path $WorkRoot 'editor-calls.txt'
 $blankLines = ("`n" * 12)
 $pwsh = (Get-Process -Id $PID).Path
 $out = $blankLines | & $pwsh -NoProfile -File $driver -InstallerPath $InstallerPath -FixturePath $gateFixture -CallsPath $callsFile 2>&1
@@ -176,7 +176,7 @@ $calls = @(Get-Content $callsFile).Count
 Check 'gate loop opened the editor once per placeholder (5)' ($calls -eq 5) "calls=$calls"
 
 # ---- Gate loop: Q exits -------------------------------------------------------
-$gateFixture2 = Join-Path $WorkDir 'gate-fixture2.psd1'
+$gateFixture2 = Join-Path $WorkRoot 'gate-fixture2.psd1'
 Copy-Item $TemplatePath $gateFixture2
 $out = "Q`n" | & $pwsh -NoProfile -File $driver -InstallerPath $InstallerPath -FixturePath $gateFixture2 -CallsPath $callsFile 2>&1
 Check 'gate loop Q exits the installer (code 1)' ($LASTEXITCODE -eq 1) "exit=$LASTEXITCODE out=$($out -join ' | ')"
