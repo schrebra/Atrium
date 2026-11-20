@@ -42,11 +42,32 @@
   .lb-btn { background: var(--panel); color: var(--text); border: 1px solid var(--border);
             border-radius: 8px; padding: 7px 13px; font-size: 15px; cursor: pointer; }
   .lb-btn:hover { border-color: var(--accent); }
-  #lb-stage { flex: 1; display: flex; align-items: center; justify-content: center; gap: 10px;
-              padding: 0 14px 20px; min-height: 0; }
+  #lb-stage { flex: 1; display: flex; align-items: center; justify-content: center;
+              padding: 0 10px 16px; min-height: 0; position: relative; touch-action: none;
+              overflow: hidden; }
   #lb-img { max-width: 100%; max-height: 100%; border-radius: 6px; touch-action: none;
             transform-origin: center center; user-select: none; -webkit-user-drag: none; }
-  .lb-nav { font-size: 22px; padding: 12px 16px; }
+  .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 3;
+            width: 52px; height: 52px; border-radius: 50%; font-size: 30px; line-height: 1;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(22, 33, 46, 0.88); color: var(--text);
+            border: 1px solid var(--border); cursor: pointer; padding: 0 0 4px; }
+  .lb-nav:hover, .lb-nav:active { border-color: var(--accent); background: rgba(38, 54, 70, 0.95); }
+  #lb-prev { left: 12px; }
+  #lb-next { right: 12px; }
+  @media (max-width: 640px) {
+    header { padding: 20px 16px 4px; }
+    header h1 { font-size: 23px; }
+    .filters { padding: 0 16px; overflow-x: auto; }
+    main { padding: 14px 16px 36px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    figure img { height: 110px; }
+    #lb-head { flex-wrap: wrap; gap: 8px; padding: 10px 14px; }
+    #lb-count { margin-left: 0; }
+    .lb-nav { width: 46px; height: 46px; font-size: 26px; }
+    #lb-prev { left: 8px; }
+    #lb-next { right: 8px; }
+  }
   footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 34px; color: var(--dim); font-size: 13px; }
 </style>
 </head>
@@ -76,9 +97,9 @@
     <button class="lb-btn" id="lb-close">Close (Esc)</button>
   </div>
   <div id="lb-stage">
-    <button class="lb-btn lb-nav" id="lb-prev" title="Previous (Left arrow)">&#8249;</button>
     <img id="lb-img" alt="">
-    <button class="lb-btn lb-nav" id="lb-next" title="Next (Right arrow)">&#8250;</button>
+    <button class="lb-nav" id="lb-prev" title="Previous screenshot (Left arrow or swipe)" aria-label="Previous screenshot">&#8249;</button>
+    <button class="lb-nav" id="lb-next" title="Next screenshot (Right arrow or swipe)" aria-label="Next screenshot">&#8250;</button>
   </div>
 </div>
 
@@ -181,10 +202,12 @@
     if (e.key === "ArrowRight") step(1);
   });
 
-  // Touch and mouse gestures in the viewer: swipe to move between
-  // screenshots (when not zoomed), pinch or wheel to zoom, drag to pan
-  // while zoomed, double-tap or double-click to toggle zoom.
-  var pinchDist = 0, dragStart = null, touchStartX = null, lastTap = 0;
+  // Gestures in the viewer, bound to the whole stage so a swipe works
+  // wherever it starts: a horizontal flick moves between screenshots at
+  // any zoom level; pinch or wheel zooms (1x to 4x); a drag pans while
+  // zoomed; double-tap or double-click toggles zoom.
+  var stage = document.getElementById("lb-stage");
+  var pinchDist = 0, dragStart = null, gesture = null, lastTap = 0;
   function dist(t) {
     var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
     return Math.sqrt(dx * dx + dy * dy);
@@ -194,18 +217,20 @@
     if (scale === 1) { tx = 0; ty = 0; }
     applyTransform();
   }
-  lbImg.addEventListener("touchstart", function (e) {
-    if (e.touches.length === 2) { pinchDist = dist(e.touches); dragStart = null; }
+  stage.addEventListener("touchstart", function (e) {
+    if (e.target.closest(".lb-nav")) return;
+    if (e.touches.length === 2) { pinchDist = dist(e.touches); dragStart = null; gesture = null; }
     else if (e.touches.length === 1) {
-      touchStartX = e.touches[0].clientX;
-      dragStart = { x: e.touches[0].clientX - tx, y: e.touches[0].clientY - ty };
+      var t = e.touches[0];
+      gesture = { x: t.clientX, y: t.clientY, time: Date.now() };
+      dragStart = { x: t.clientX - tx, y: t.clientY - ty };
       var now = Date.now();
-      if (now - lastTap < 300) { setScale(scale > 1 ? 1 : 2); }
+      if (now - lastTap < 300) { setScale(scale > 1 ? 1 : 2); gesture = null; }
       lastTap = now;
     }
     e.preventDefault();
   }, { passive: false });
-  lbImg.addEventListener("touchmove", function (e) {
+  stage.addEventListener("touchmove", function (e) {
     if (e.touches.length === 2 && pinchDist > 0) {
       var d = dist(e.touches);
       setScale(scale * (d / pinchDist));
@@ -217,18 +242,25 @@
     }
     e.preventDefault();
   }, { passive: false });
-  lbImg.addEventListener("touchend", function (e) {
-    if (touchStartX !== null && e.changedTouches.length === 1 && scale === 1) {
-      var dx = e.changedTouches[0].clientX - touchStartX;
-      if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
+  stage.addEventListener("touchend", function (e) {
+    if (gesture && e.changedTouches.length === 1) {
+      var t = e.changedTouches[0];
+      var dx = t.clientX - gesture.x, dy = t.clientY - gesture.y;
+      var dt = Date.now() - gesture.time;
+      // A flick: mostly horizontal, fast, and far enough. Navigates at
+      // any zoom level; step() re-renders, which resets the zoom.
+      if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 600) {
+        step(dx < 0 ? 1 : -1);
+      }
     }
-    touchStartX = null; dragStart = null; pinchDist = 0;
+    gesture = null; dragStart = null; pinchDist = 0;
   });
-  lbImg.addEventListener("wheel", function (e) {
+  stage.addEventListener("wheel", function (e) {
     e.preventDefault();
     setScale(scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
   }, { passive: false });
-  lbImg.addEventListener("mousedown", function (e) {
+  stage.addEventListener("mousedown", function (e) {
+    if (e.target.closest(".lb-nav")) return;
     if (scale > 1) dragStart = { x: e.clientX - tx, y: e.clientY - ty };
   });
   document.addEventListener("mousemove", function (e) {
