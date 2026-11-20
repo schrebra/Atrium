@@ -23,12 +23,12 @@ function Fail-Run { param([string]$Stage, [string]$Message) throw "[$Stage] $Mes
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($InstallerPath, [ref]$tokens, [ref]$errors)
 if ($errors -and $errors.Count) { throw "installer does not parse: $($errors[0].Message)" }
-$wantedData = @('$script:ConfigSpec', '$script:ConfigTemplateSha256', '$script:BundleVersion', '$script:SchemaVersion')
+$wantedData = @('$script:ConfigSpec', '$script:BundleVersion', '$script:SchemaVersion')
 $assigns = $ast.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     $n.Left.Extent.Text -in $wantedData }, $true)
 foreach ($a in $assigns) { . ([scriptblock]::Create($a.Extent.Text)) }
-$wantedFuncs = @('Read-AtriumConfig', 'Get-MissingConfigValues', 'Test-ConfigUntouched',
+$wantedFuncs = @('Read-AtriumConfig', 'Get-MissingConfigValues',
                  'Open-ConfigEditor', 'Invoke-ConfigGate', 'Show-ConfigSummary',
                  'Confirm-ConfigSummary', 'Compare-HardwareTier', 'Resolve-DefenderPath',
                  'Test-ScannerPrecondition')
@@ -37,7 +37,7 @@ $defs = $ast.FindAll({ param($n)
     $n.Name -in $wantedFuncs }, $true)
 foreach ($d in $defs) { . ([scriptblock]::Create($d.Extent.Text)) }
 Check 'extraction: all config functions found' ($defs.Count -eq $wantedFuncs.Count) "found $($defs.Count) of $($wantedFuncs.Count)"
-Check 'extraction: template hash stamped' ($script:ConfigTemplateSha256 -match '^[0-9A-F]{64}$')
+Check 'extraction: no template hash coupling' ($null -eq $script:ConfigTemplateSha256)
 
 # ---- Fixtures ------------------------------------------------------------
 if (Test-Path $WorkRoot) { Remove-Item $WorkRoot -Recurse -Force }
@@ -79,14 +79,15 @@ $fxAd = Join-Path $WorkRoot 'ad-on.psd1'
 $cfgT = Read-AtriumConfig -Path $fxTemplate
 Check 'template loads' ($null -ne $cfgT)
 Check 'identity merged (BundleVersion)' ($cfgT.BundleVersion -eq $script:BundleVersion)
-Check 'template detected untouched' (Test-ConfigUntouched -Path $fxTemplate)
+$fxCommentOnly = Join-Path $WorkRoot 'fixture-comment-only.psd1'
+($templateText -replace 'HOW TO USE THIS FILE', 'HOW TO USE THIS FILE (operator copy)') | Set-Content $fxCommentOnly -NoNewline
+Check 'comment-only edit judged by values (missing still 5)' (@(Get-MissingConfigValues -Cfg (Read-AtriumConfig -Path $fxCommentOnly) -Lab $false).Count -eq 5)
 $mAll = @(Get-MissingConfigValues -Cfg $cfgT -Lab $false)
 Check 'template missing = 5 (production)' ($mAll.Count -eq 5) ($mAll -join '; ')
 $mLab = @(Get-MissingConfigValues -Cfg $cfgT -Lab $true)
 Check 'template missing = 2 (lab exemptions)' ($mLab.Count -eq 2) ($mLab -join '; ')
 
 $cfgC = Read-AtriumConfig -Path $fxComplete
-Check 'complete config not untouched' (-not (Test-ConfigUntouched -Path $fxComplete))
 Check 'complete config missing = 0' (@(Get-MissingConfigValues -Cfg $cfgC -Lab $false).Count -eq 0)
 
 $mHalf = @(Get-MissingConfigValues -Cfg (Read-AtriumConfig -Path $fxHalf) -Lab $false)
@@ -172,9 +173,9 @@ $driver = Join-Path $WorkRoot 'gate-driver.ps1'
 param([string]$InstallerPath, [string]$FixturePath, [string]$CallsPath)
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($InstallerPath, [ref]$tokens, [ref]$errors)
-$wantedData = @('$script:ConfigSpec', '$script:ConfigTemplateSha256', '$script:BundleVersion', '$script:SchemaVersion')
+$wantedData = @('$script:ConfigSpec', '$script:BundleVersion', '$script:SchemaVersion')
 $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -in $wantedData }, $true) | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
-$wantedFuncs = @('Read-AtriumConfig', 'Get-MissingConfigValues', 'Test-ConfigUntouched', 'Open-ConfigEditor', 'Invoke-ConfigGate')
+$wantedFuncs = @('Read-AtriumConfig', 'Get-MissingConfigValues', 'Open-ConfigEditor', 'Invoke-ConfigGate')
 $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wantedFuncs }, $true) | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
 function Write-RunLog { param([string]$Message) }
 function Fail-Run { param([string]$Stage, [string]$Message) throw "[$Stage] $Message" }

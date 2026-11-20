@@ -1,7 +1,7 @@
 # Atrium: Administrator Guide
 
 How to install, configure, and run an Atrium server. This guide describes the
-system as of build **261119_2003** (schema v15). Atrium is early alpha and not
+system as of build **261119_2008** (schema v15). Atrium is early alpha and not
 for production use; where a capability is planned rather than built, this guide
 says so and names the tracking issue.
 
@@ -106,12 +106,13 @@ unknown, missing, or wrongly-typed setting fails at load with the setting
 named: nothing is guessed.
 
 Deploy protects that file with an **unskippable configuration gate**. If
-the file is byte-identical to the shipped template, or any must-change
-value (hostname, CA server, WAL archive target, base backup target, seed
-admin password) still holds the shipped `__CHANGE_ME__` placeholder,
-Deploy opens the file in Notepad in front of the operator, waits, re-reads
-it, and loops (naming what is still missing) until the configuration is
-complete. The only exits are a completed configuration or exiting the
+any must-change value (hostname, CA server, WAL archive target, base
+backup target, seed admin password) still holds the shipped
+`__CHANGE_ME__` placeholder, Deploy opens the file in Notepad in front of
+the operator, waits, re-reads it, and loops (naming what is still
+missing) until the configuration is complete. The gate judges values,
+not bytes: the template's comments and examples can be edited freely
+without affecting the installer. The only exits are a completed configuration or exiting the
 installer. After the gate, Deploy prints the **effective configuration**
 (every value; secrets shown as set/not-set, never as values) and requires
 typing `YES` before Stage 1. Automation uses `-Unattended` (the gate
@@ -131,6 +132,30 @@ in its config slot:
 An empty or mismatched slot fails the build loudly, by design (issue #8 tracks
 this operator step). The repository copy ships with all four slots empty;
 GitHub Actions fills them in its own copy from the files it downloads.
+
+**Air-gapped and classified deployments.** Nothing site-specific is baked
+into the installer or the bundle: both are identical for every environment,
+and the shipped config template carries only placeholders. That separation
+is what makes a cross-domain deployment work. Build and prepare on the
+unclassified side with the pristine template, and transfer only the
+value-free artifacts (the installer, the bundle, the redistributables, and
+the template). The target network's values are authored on the target
+network, in that network's own config file: the configuration gate runs
+locally at Deploy and refuses to proceed until the placeholders are replaced
+there, so the target network's values never need to exist on the
+unclassified side. If the person running the install does not hold the
+values, the team that does prepares the config file on the target network
+and hands it over as a file; the gate checks completeness, not authorship.
+Build the transfer bundle with the pristine template next to the script:
+Build copies the config file into the bundle, so building beside a filled-in
+lab config would carry that environment's values inside it. The
+redistributable SHA-256 slots double as transfer verification: hash the
+files before transfer, hash them again after, and record the results in the
+target network's config file. Once filled in, a config file describes the
+network it belongs to (its topology, plus a one-shot seed password): treat
+it, the installer run logs (which print the effective configuration with
+secrets masked), and any configuration export as material of that network,
+and do not carry them back across the boundary.
 
 ## 5. Installing a server
 
@@ -429,7 +454,7 @@ attachment store leaves messages pointing at files that are not there.
 
 ## 12. Verification status and known limits
 
-Early alpha. What is verified as of build 261119_2003:
+Early alpha. What is verified as of build 261119_2008:
 
 - Full Build mode, the shell MSI, live-server API batteries on Windows and
   Linux, the UI battery, and a complete lab-mode Deploy (all six stages,
