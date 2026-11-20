@@ -154,7 +154,8 @@ Check 'scanner validation needs no Defender' (@(Test-ScannerPrecondition -Scanne
 Check 'scanner defender resolves the in-box copy' ((Resolve-DefenderPath -ProgramFiles $pf1 -ProgramData $pd1) -eq (Join-Path $wdDir 'MpCmdRun.exe'))
 Check 'scanner defender + in-box copy = no problems' (@(Test-ScannerPrecondition -Scanner 'defender' -ProgramFiles $pf1 -ProgramData $pd1).Count -eq 0)
 $resolvedPlat = Resolve-DefenderPath -ProgramFiles $pfEmpty -ProgramData $pd2
-Check 'scanner defender resolves the newest Platform copy' ($resolvedPlat -eq (Join-Path $v2 'MpCmdRun.exe')) "got: [$resolvedPlat] want: [$(Join-Path $v2 'MpCmdRun.exe')]"
+$wantPlat = (Get-Item (Join-Path $v2 'MpCmdRun.exe')).FullName
+Check 'scanner defender resolves the newest Platform copy' ($resolvedPlat -eq $wantPlat) "got: [$resolvedPlat] want: [$wantPlat]"
 $p = @(Test-ScannerPrecondition -Scanner 'defender' -ProgramFiles $pfEmpty -ProgramData $pd1)
 Check 'scanner defender missing = one named problem' ($p.Count -eq 1 -and $p[0] -match 'MpCmdRun' -and $p[0] -match "'validation'") ($p -join '; ')
 $p = @(Test-ScannerPrecondition -Scanner 'bogus' -ProgramFiles $pfEmpty -ProgramData $pd1)
