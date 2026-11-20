@@ -51,6 +51,11 @@ jobs:
       file: ${{ steps.inst.outputs.file }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate the CI contracts
+        shell: pwsh
+        run: |
+          & ./tests/ci-contract-check.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install the pinned .NET SDK (10.0.100)
         shell: pwsh
         run: |
@@ -232,6 +237,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate the CI contracts
+        shell: pwsh
+        run: |
+          & ./tests/ci-contract-check.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install the pinned .NET SDK (10.0.100)
         shell: pwsh
         run: |
@@ -383,6 +393,11 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate the CI contracts
+        shell: pwsh
+        run: |
+          & ./tests/ci-contract-check.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install the pinned .NET SDK (10.0.100)
         run: |
           curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh
@@ -479,6 +494,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate the CI contracts
+        shell: pwsh
+        run: |
+          & ./tests/ci-contract-check.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install the pinned .NET SDK (10.0.100)
         shell: pwsh
         run: |
