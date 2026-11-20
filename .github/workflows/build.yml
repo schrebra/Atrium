@@ -21,13 +21,12 @@ name: Build check and release
 #                    archive folders) on the Windows Server runner:
 #                    IIS site, PostgreSQL, and the built-in smoke test.
 #
-# The repo copy of Atrium-Config.psd1 keeps its redistributable
-# SHA-256 slots empty on purpose (issue #8: the operator records the
-# hashes of THEIR redist files). CI jobs download the four
-# redistributables, fill the slots in their own checked-out copy of
-# the config with the hashes of the files they downloaded, and build
-# that copy. The release ships the pristine repo installer and
-# config, never a CI copy or the CI bundle.
+# The installer ships the SHA-256 pin and the official download
+# location of every redistributable: CI jobs download the four
+# files, and the build verifies each one against its pin (a
+# mismatch fails the build, naming the file). The release ships the
+# pristine repo installer and config, never a CI copy or the CI
+# bundle.
 
 on:
   push:
@@ -115,25 +114,6 @@ jobs:
           Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
           Invoke-WebRequest 'https://www.powershellgallery.com/api/v2/package/IISAdministration/1.1.0.0' -OutFile 'redist/IISAdministration.1.1.0.0.nupkg'
           Get-ChildItem redist | Select-Object Name, Length
-      - name: Fill the redist hash slots in the CI copy
-        shell: pwsh
-        run: |
-          $path = './Atrium-Config.psd1'
-          $text = [IO.File]::ReadAllText($path)
-          $map = [ordered]@{
-            PgInstallerSha256       = 'redist/postgresql-17.4-windows-x64.exe'
-            HostingBundleSha256     = 'redist/dotnet-hosting-10.0.0-win.exe'
-            WebView2InstallerSha256 = 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-            IisAdminModuleSha256    = 'redist/IISAdministration.1.1.0.0.nupkg'
-          }
-          foreach ($k in $map.Keys) {
-            $hash = (Get-FileHash $map[$k] -Algorithm SHA256).Hash
-            $pattern = "(?m)^(\s*$k\s*=\s*)''"
-            if ($text -notmatch $pattern) { throw "Hash slot $k not found in Atrium-Config.psd1." }
-            $text = $text -replace $pattern, "`$1'$hash'"
-            Write-Host "$k <- $hash"
-          }
-          [IO.File]::WriteAllText($path, $text)
       - name: Run the full build
         shell: pwsh
         run: |
@@ -527,24 +507,6 @@ jobs:
           Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.0/dotnet-hosting-10.0.0-win.exe' -OutFile 'redist/dotnet-hosting-10.0.0-win.exe'
           Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
           Invoke-WebRequest 'https://www.powershellgallery.com/api/v2/package/IISAdministration/1.1.0.0' -OutFile 'redist/IISAdministration.1.1.0.0.nupkg'
-      - name: Fill the redist hash slots in the CI copy
-        shell: pwsh
-        run: |
-          $path = './Atrium-Config.psd1'
-          $text = [IO.File]::ReadAllText($path)
-          $map = [ordered]@{
-            PgInstallerSha256       = 'redist/postgresql-17.4-windows-x64.exe'
-            HostingBundleSha256     = 'redist/dotnet-hosting-10.0.0-win.exe'
-            WebView2InstallerSha256 = 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-            IisAdminModuleSha256    = 'redist/IISAdministration.1.1.0.0.nupkg'
-          }
-          foreach ($k in $map.Keys) {
-            $hash = (Get-FileHash $map[$k] -Algorithm SHA256).Hash
-            $pattern = "(?m)^(\s*$k\s*=\s*)''"
-            if ($text -notmatch $pattern) { throw "Hash slot $k not found in Atrium-Config.psd1." }
-            $text = $text -replace $pattern, "`$1'$hash'"
-          }
-          [IO.File]::WriteAllText($path, $text)
       - name: Fill the lab values in the CI config copy
         shell: pwsh
         run: |
