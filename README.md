@@ -10,8 +10,8 @@
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10">
   <img src="https://img.shields.io/badge/PostgreSQL-17.4-336791" alt="PostgreSQL 17.4">
   <img src="https://img.shields.io/badge/Platform-Windows%20Server%20%2B%20IIS-0078D6" alt="Windows Server + IIS">
-  <img src="https://img.shields.io/badge/Current%20build-261120__1140-5b8cff" alt="Current build 261120_1140">
-  <img src="https://img.shields.io/badge/Schema-v15-5b8cff" alt="Schema v15">
+  <img src="https://img.shields.io/badge/Current%20build-261120__1502-5b8cff" alt="Current build 261120_1502">
+  <img src="https://img.shields.io/badge/Schema-v16-5b8cff" alt="Schema v16">
   <img src="https://img.shields.io/badge/Status-early%20alpha%20-%20not%20for%20production-red" alt="Status: early alpha, not for production">
 </p>
 
@@ -39,7 +39,7 @@ What is true today:
 
 Atrium is a Mattermost-class internal chat system built to run entirely on a local network for a single organization of any size, from a small office to thousands of users. It is written in C# on .NET 10: an ASP.NET Core server hosted on IIS, a PostgreSQL database, and a Blazor WebAssembly client delivered in a thin WebView2 desktop shell.
 
-The entire system ships as **one self-contained installer**, `261120_1140_Install-Atrium.ps1`, with its environment settings in the commented `Atrium-Config.psd1` beside it. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
+The entire system ships as **one self-contained installer**, `261120_1502_Install-Atrium.ps1`, with its environment settings in the commented `Atrium-Config.psd1` beside it. Every source file (server, client, shell, database schema) is embedded in the installer, which provisions or verifies the toolchain, builds the binaries, and deploys the result. There is no separate source tree to keep in sync and no build server to maintain: the installer *is* the release.
 
 ## Screenshots
 
@@ -76,14 +76,14 @@ The entire system ships as **one self-contained installer**, `261120_1140_Instal
 Build:
 
 ```powershell
-.\261120_1140_Install-Atrium.ps1 -Mode Build             # emit, compile, and package
-.\261120_1140_Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
+.\261120_1502_Install-Atrium.ps1 -Mode Build             # emit, compile, and package
+.\261120_1502_Install-Atrium.ps1 -Mode Build -EmitOnly   # emit the embedded source tree only
 ```
 
 Deploy:
 
 ```powershell
-.\261120_1140_Install-Atrium.ps1 -Mode Deploy
+.\261120_1502_Install-Atrium.ps1 -Mode Deploy
 ```
 
 Redistributables are automatic: the installer ships the SHA-256 pin and the official download location of each one. A file already in `redist\` is verified against its pin and used; a missing file is downloaded and accepted only on a hash match, so an unverified redistributable cannot slip through.
@@ -98,6 +98,7 @@ Redistributables are automatic: the installer ships the SHA-256 pin and the offi
 - Message edit/delete with global defaults and per-user / per-channel overrides (resolution: per-user > per-channel > global). Deletions are invisible to everyone; the record is retained on the back end (append-only edit history + audit rows)
 - Per-channel drafts stored on the device; spell check in the composer
 - Threads: one-level replies scoped to a parent message, with explicit follow state, per-thread read positions, and action-center notifications; deleting a thread root leaves its replies readable, with no marker
+- Message severity: a root message can be sent as Important (amber card in the message flow) or Critical (red card, plus a bar pinned under the channel header naming the sender with a jump-to-message action). Severity is a property of the message, never typed markup; thread replies cannot carry it, and every severity send is written to the audit log
 
 **Presence and notifications**
 - Presence is **computed at read time, never stored**: Online (connected, active within 5 min), Away (connected, idle past 5 min), Offline (disconnected). A connection whose client has not checked in for 150 seconds reads Offline even with a live socket
@@ -146,7 +147,7 @@ Each roadmap item, verification task, and known defect is tracked as an issue in
 ## Repository layout
 
 ```
-261120_1140_Install-Atrium.ps1   the installer, the entire system, embedded
+261120_1502_Install-Atrium.ps1   the installer, the entire system, embedded
 Atrium-Config.psd1   every environment setting, fully commented, the file you edit
 README.md            this file
 vision.md            why Atrium exists

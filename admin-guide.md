@@ -1,7 +1,7 @@
 # Atrium Administrator Guide
 
 **Product:** Atrium (self-hosted team chat for internal networks)
-**Applies to:** build **261120_1140**, schema v15
+**Applies to:** build **261120_1502**, schema v16
 **Status:** Early alpha. This release is not for production use. Where a
 capability is planned rather than implemented, this guide states that and
 names the tracking issue.
@@ -14,7 +14,7 @@ installer is correct and the guide is in error: file an issue.
 **Conventions used in this guide**
 
 - `<stamp>` is the build stamp in the installer file name, in the format
-  `YYMMDD_HHMM` (for example, `261120_1140_Install-Atrium.ps1`).
+  `YYMMDD_HHMM` (for example, `261120_1502_Install-Atrium.ps1`).
 - Commands are shown exactly as they are to be typed.
 - **Note** marks information that prevents a common mistake. **Warning**
   marks an action that destroys data or removes access if performed as
@@ -477,6 +477,20 @@ search results. The previous content is retained in the database for
 administrators, deletions write an audit record, and neither is exposed
 to users.
 
+**Message severity.** A sender can mark a root message Important or
+Critical from the composer (the warning icon beside the attach button
+cycles Normal, Important, Critical). Important renders as an amber card
+in the message flow. Critical renders as a red card and pins a bar under
+the channel header naming the sender, with a jump-to-message action;
+the bar shows the newest Critical message in the history the client has
+loaded, until the reader dismisses it or a newer Critical message
+arrives. Thread replies cannot carry severity, and the server rejects
+any severity value outside 0, 1, and 2. Every severity send writes an
+audit record (action `message.severity`, with the channel, the message
+sequence, and the level) in the same transaction as the message itself.
+Any member can use either level; the audit trail is the control against
+overuse.
+
 ### 6.4 Alerting
 
 Alerting fires on **transitions only**: one notification when a check
@@ -724,7 +738,7 @@ line is the diagnosis.
 
 ## 12. Verification status and known limits
 
-Verified as of build 261120_1140:
+Verified as of build 261120_1502:
 
 - Full Build mode, the shell MSI build and installation, live-server API
   test batteries on Windows and Linux, the user interface test battery,
