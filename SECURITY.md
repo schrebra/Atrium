@@ -20,5 +20,5 @@ Only the latest build is supported. Installs are total rebuilds by design; there
 
 ## Known by-design items
 
-- The installer contains a documented bootstrap administrator password. Deploy mode rotates it to a per-install generated password, and the first sign-in forces a change before anything else is reachable. The default being visible in the installer source is by design and is not a vulnerability.
+- The seed administrator password is an operator-set configuration value: the shipped configuration template carries a placeholder, and the installer's configuration gate refuses to proceed until the operator replaces it. The first sign-in forces a password change before anything else is reachable. The placeholder being visible in the shipped template is by design and is not a vulnerability: it cannot be deployed as-is.
 - Install-time configuration defaults include placeholder hostnames for internal services (backup target, certificate authority). These are configuration values, not credentials.

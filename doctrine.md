@@ -22,7 +22,7 @@ The loop scales by stakes. **Tier 1** (reversible, small blast radius): predict 
 
 ## 3. Deterministic and pinned
 
-Toolchains, packages, and redistributables are pinned to exact, known-good versions and verified at build time: an SDK that is merely "newer" fails the build. NuGet restores run locked against committed lock files. Redistributable installers are accepted only when their SHA-256 matches a hash the operator recorded from the actual files.
+Toolchains, packages, and redistributables are pinned to exact, known-good versions and verified at build time: an SDK that is merely "newer" fails the build. NuGet restores run locked against committed lock files. Redistributable installers are accepted only when their SHA-256 matches the pin shipped in the installer, computed from the official download; a missing file is downloaded from the official location and accepted only on a match.
 
 ## 4. Clean-slate rebuilds
 

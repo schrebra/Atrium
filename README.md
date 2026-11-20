@@ -71,7 +71,7 @@ The entire system ships as **one self-contained installer**, `261119_2039_Instal
 
 **Prerequisites (build machine):** Windows with PowerShell, .NET SDK 10.0.100, WiX 7.0.1. The build verifies both pins exactly and stops on any mismatch.
 
-**Prerequisites (target server):** Windows Server with IIS, and the PostgreSQL 17.4, .NET hosting bundle, and WebView2 redistributable installers staged locally.
+**Prerequisites (target server):** Windows Server with IIS. The redistributables (PostgreSQL 17.4, the .NET hosting bundle, the WebView2 runtime, and the IISAdministration module) are acquired automatically by the build (see below); staging them in `redist\` beforehand is the offline option.
 
 Build:
 
@@ -88,7 +88,7 @@ Deploy:
 
 Redistributables are automatic: the installer ships the SHA-256 pin and the official download location of each one. A file already in `redist\` is verified against its pin and used; a missing file is downloaded and accepted only on a hash match, so an unverified redistributable cannot slip through.
 
-**Pinned versions** (exact, verified at build time): .NET SDK 10.0.100 / ASP.NET Core 10.0.15 train · Npgsql 10.0.3 · MudBlazor 9.14.0 · WebView2 1.0.4314.35 · PostgreSQL 17.4 · WiX 7.0.1 · Magick.NET-Q8-x64 15.1.0. NuGet restore runs locked (`RestoreLockedMode`) against committed lock files.
+**Pinned versions** (exact, verified at build time): .NET SDK 10.0.100 / ASP.NET Core 10.0.15 train · Npgsql 10.0.3 · MudBlazor 9.14.0 · WebView2 1.0.4314.35 · PostgreSQL 17.4 · WiX 7.0.1 · Magick.NET-Q8-x64 15.1.0 · IISAdministration 1.1.0.0. NuGet restore runs locked (`RestoreLockedMode`) against committed lock files.
 
 ## Feature set
 
@@ -132,7 +132,7 @@ Core flows are verified with automated browser and API test batteries against a 
 
 ## Roadmap
 
-In planned order: general (non-image) file uploads · data export · voice/video calls (LiveKit) · Boards · Group Policy templates (ADMX/ADML). Webhooks only if a concrete consumer appears.
+In planned order: general (non-image) file uploads · data export · voice/video calls (LiveKit) · Boards · Group Policy templates (ADMX/ADML). Webhooks, whose first concrete consumer (a SIEM catalog of blocked attachments) has been identified.
 
 Each roadmap item, verification task, and known defect is tracked as an issue in this repository: the issue tracker is the canonical status for open work.
 

@@ -29,7 +29,7 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 5. **Group Policy templates (ADMX/ADML).** Administrative templates so domain administrators can manage the server and the desktop shell through Group Policy, matching the GPO-only endpoint deployment model. Policies map onto the configuration surfaces that already exist (the server config file, shell settings for the client); where a policy and a local/console setting both exist, policy wins. Tracked as issue #15.
 6. **Automated off-site backup and restore, plus settings/configuration export.** Scheduled base backups with retention to an off-site target (WAL archiving already exists; recurring base backups and pruning do not), an operator-facing restore from base backup + WAL replay, backup health through the existing alerting routes, and a single portable export of all settings and configuration (distinct from the R-8 data export). Tracked as issue #16.
 
-**Conditional:** webhooks (R-9): only if a concrete consumer appears. Nothing is built speculatively.
+**Conditional:** webhooks (R-9): held until a concrete consumer appeared; the first one has (the SIEM blocked-attachment catalog, issues #6 and #21). Not yet built.
 
 **Under consideration (not adopted):** high availability with live failover across up to 3 servers (issue #17, raised Nov 19, 2026). Adopting it would supersede the single-VM topology ruling and remove "clustering / multi-node deployment" from the not-planned list below; until Brandon decides, both stand as written.
 
@@ -43,7 +43,7 @@ These are built and verified by construction or on substitute harnesses; each ne
 - [ ] GPO deployment of the shell
 - [ ] Kerberos/AD sync against real Windows Active Directory at ~3,000-user scale (verified so far against a Samba AD DC harness)
 - [ ] SMTP alert delivery to on-prem Exchange (delivery is by construction; the sandbox used for development cannot send mail)
-- [ ] Capacity spikes: LiveKit room load, WebView2 shell behaviors, keyset scrollback against a ~22M-row message table
+- [ ] Capacity spikes: LiveKit room load, WebView2 shell behaviors, keyset scrollback against a ~22M-row message table, 100 concurrent searches at full history volume (issue #12)
 
 ## Operator tasks outstanding
 
