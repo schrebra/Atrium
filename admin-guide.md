@@ -93,19 +93,33 @@ all four are pinned and SHA-256-verified before they are used):
 4. The IISAdministration PowerShell module package (1.1.0.0), which Deploy
    uses to manage IIS
 
-**Configuration is the script itself.** The top of the installer is a
-configuration block (hostname, ports, paths, certificate template, database
-names, seed admin, AD settings, SMTP relay, and the SHA-256 slots). Lab and
-production are two saved copies of the script with different values — there is
-no separate configuration system to learn or secure.
+**Configuration is a separate file: `Atrium-Config.psd1`.** Every
+environment value (hostname, ports, paths, certificate template, database
+names, seed admin, AD settings, SMTP relay, and the SHA-256 slots) lives in
+a commented PowerShell data file next to the installer — values and
+comments only, never code, so an operator never edits a script. Each
+setting's comment states its purpose, the effect of getting it wrong, and
+a recommendation; a sizing table at the top covers the Small / Medium /
+Large deployment tiers. Keep one copy per environment and select it with
+`-ConfigPath` (for example `Atrium-Config-Production.psd1`). A file with an
+unknown, missing, or wrongly-typed setting fails at load with the setting
+named — nothing is guessed.
 
-> **Directed change (Nov 19, 2026 — issue #35):** configuration is moving out
-> of the script into a separate, fully commented config file next to it, so an
-> operator never has to edit a script. Every setting will carry a comment
-> (purpose, effect, recommendation, and sizing guidance by deployment tier),
-> and an unmodified config is an unskippable gate: the launcher opens it in an
-> editor and refuses to proceed until the must-change values are set. Until
-> that lands, the model above is what the current build does.
+Deploy protects that file with an **unskippable configuration gate**. If
+the file is byte-identical to the shipped template, or any must-change
+value (hostname, CA server, WAL archive target, base backup target, seed
+admin password) still holds the shipped `__CHANGE_ME__` placeholder,
+Deploy opens the file in Notepad in front of the operator, waits, re-reads
+it, and loops — naming what is still missing — until the configuration is
+complete. The only exits are a completed configuration or exiting the
+installer. After the gate, Deploy prints the **effective configuration**
+(every value; secrets shown as set/not-set, never as values) and requires
+typing `YES` before Stage 1. Automation uses `-Unattended` (the gate
+condition becomes an immediate, named failure instead of the editor) plus
+`-AcceptConfigSummary` (asserts the logged summary was reviewed); neither
+switch ever produces a silent pass. Preflight also compares the server's
+cores, RAM, and free disk against the declared `DeploymentTier` and prints
+loud warnings on a shortfall.
 
 **Before your first Build**, record the SHA-256 of each of your redist files
 in its config slot:
@@ -138,10 +152,11 @@ GitHub Actions fills them in its own copy from the files it downloads.
 
 **Steps**
 
-1. Edit the installer's configuration block for your environment (hostname,
-   paths, CA, backup targets, AD and SMTP settings if used).
+1. Edit `Atrium-Config.psd1` for your environment (hostname, paths, CA,
+   backup targets, AD and SMTP settings if used) — or skip this and let
+   Deploy's configuration gate open the file for you (see §4).
 2. Place the four redistributables in `redist\` next to the script and record
-   their SHA-256 hashes in the config (see §4).
+   their SHA-256 hashes in `Atrium-Config.psd1` (see §4).
 3. Run `.\<stamp>_Install-Atrium.ps1 -Mode Build`. This produces the
    `Atrium-Bundle` folder, verified against its manifest.
 4. Copy the bundle to the server (or run on the server itself).
@@ -263,7 +278,7 @@ server-side values mirrored from the installer configuration and console
 settings, and client-side shell settings (server address, sign-in behavior,
 view defaults). The intended precedence is **policy wins**: a policy-managed
 setting will show as locked in the console wherever it appears. Until the
-templates ship, server configuration is the installer config (§4) and the
+templates ship, server configuration is the config file (§4) and the
 console (§6) — there is no registry-based configuration today, and this guide
 will be updated when that changes.
 
@@ -275,7 +290,7 @@ break-glass even with AD enabled.
 
 **Enabling it** is install-time configuration: set `AdEnabled`, the directory
 server, base DNs, the sync bind account, and the group-to-channel map in the
-installer config, then run Deploy. Two server-side pieces matter:
+`Atrium-Config.psd1`, then run Deploy. Two server-side pieces matter:
 
 - **App pool identity / SPN.** With AD on, the app pool should run as a group
   Managed Service Account (gMSA) holding the `HTTP/<hostname>` SPN, so
@@ -339,8 +354,9 @@ different places:
    PostgreSQL and replay WAL to the desired point — the data tier comes back
    as it was.
 2. **The install-time configuration** (hostname, paths, certificate, AD and
-   SMTP settings) lives in your saved production copy of the installer script
-   (§4). Stand the application tier up from that copy and point it at the
+   SMTP settings) lives in your saved production `Atrium-Config.psd1` (§4) —
+   and a copy of the config file travels inside every bundle Build produces.
+   Stand the application tier up with that config file and point it at the
    restored database.
 
 Automating this end to end (scheduled base backups with retention, an

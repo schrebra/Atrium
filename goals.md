@@ -26,7 +26,7 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 2. **Data export (R-8).** An operator export tool for channel history and audit data.
 3. **Voice/video calls (R-10).** LiveKit SFU. Planning basis: 20 rooms, 30 participants in the largest room (a configuration cap), 150 aggregate publishers. Placement of the LiveKit service (its own Linux VM vs. the main server) is decided when this attaches.
 4. **Boards (R-11).** Kanban-style boards, in scope from the original design. Playbooks are explicitly out.
-5. **Group Policy templates (ADMX/ADML).** Administrative templates so domain administrators can manage the server and the desktop shell through Group Policy, matching the GPO-only endpoint deployment model. Policies map onto the configuration surfaces that already exist (installer config for the server, shell settings for the client); where a policy and a local/console setting both exist, policy wins. Tracked as issue #15.
+5. **Group Policy templates (ADMX/ADML).** Administrative templates so domain administrators can manage the server and the desktop shell through Group Policy, matching the GPO-only endpoint deployment model. Policies map onto the configuration surfaces that already exist (the server config file, shell settings for the client); where a policy and a local/console setting both exist, policy wins. Tracked as issue #15.
 6. **Automated off-site backup and restore, plus settings/configuration export.** Scheduled base backups with retention to an off-site target (WAL archiving already exists; recurring base backups and pruning do not), an operator-facing restore from base backup + WAL replay, backup health through the existing alerting routes, and a single portable export of all settings and configuration (distinct from the R-8 data export). Tracked as issue #16.
 
 **Conditional:** webhooks (R-9) — only if a concrete consumer appears. Nothing is built speculatively.
@@ -47,7 +47,7 @@ These are built and verified by construction or on substitute harnesses; each ne
 
 ## Operator tasks outstanding
 
-- [ ] Record the SHA-256 hashes of the actual redistributable installers (PostgreSQL, .NET hosting bundle, WebView2) in the installer config — the slots ship empty by design, and the Build run's redistributable check fails until they are filled
+- [ ] Record the SHA-256 hashes of the actual redistributable installers (PostgreSQL, .NET hosting bundle, WebView2) in `Atrium-Config.psd1` — the slots ship empty by design, and the Build run's redistributable check fails until they are filled
 - [ ] Confirm the build machine carries exactly SDK 10.0.100 and WiX 7.0.1, or update the pins deliberately
 
 ## Open engineering items
