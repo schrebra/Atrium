@@ -45,7 +45,7 @@ The entire system ships as **one self-contained installer**, `261120_1124_Instal
 
 ![Chat, maximized view](docs/images/chat.png)
 
-**[Browse the full screenshot gallery](docs/gallery.md)**: sign-in, chat, search, the action center, profile cards, the picture viewer, pop-out instances, and the admin console (message policy, settings, resources, health).
+**[Browse the full screenshot gallery](https://schrebra.github.io/Atrium/)**: every client and admin console screen, as a thumbnail grid with a full-size viewer.
 
 ## Architecture
 
@@ -152,6 +152,6 @@ README.md            this file
 vision.md            why Atrium exists
 doctrine.md          the principles it is built under, incl. the PROVE loop
 goals.md             state, roadmap, and open items
-docs/gallery.md      screenshot gallery
+docs/gallery.md      screenshot gallery (link to the live gallery site)
 docs/images/         logo and screenshots
 ```
