@@ -64,9 +64,13 @@
     figure img { height: 110px; }
     #lb-head { flex-wrap: wrap; gap: 8px; padding: 10px 14px; }
     #lb-count { margin-left: 0; }
-    .lb-nav { width: 46px; height: 46px; font-size: 26px; }
-    #lb-prev { left: 8px; }
-    #lb-next { right: 8px; }
+    /* The nav buttons leave the picture area on narrow screens: the stage
+       reserves a strip at the bottom and the buttons sit in it, so the
+       whole screenshot stays visible. */
+    #lb-stage { padding-bottom: 74px; }
+    .lb-nav { width: 46px; height: 46px; font-size: 26px; top: auto; bottom: 14px; transform: none; }
+    #lb-prev { left: 14px; }
+    #lb-next { right: 14px; }
   }
   footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 34px; color: var(--dim); font-size: 13px; }
 </style>
