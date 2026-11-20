@@ -21,12 +21,13 @@ name: Build check and release
 #                    archive folders) on the Windows Server runner:
 #                    IIS site, PostgreSQL, and the built-in smoke test.
 #
-# The repo copy of the installer keeps its redistributable SHA-256
-# slots empty on purpose (issue #8: the operator records the hashes of
-# THEIR redist files). CI jobs download the four redistributables,
-# fill the slots in their own checked-out copy with the hashes of the
-# files they downloaded, and build that copy. The release ships the
-# pristine repo installer, never a CI copy or the CI bundle.
+# The repo copy of Atrium-Config.psd1 keeps its redistributable
+# SHA-256 slots empty on purpose (issue #8: the operator records the
+# hashes of THEIR redist files). CI jobs download the four
+# redistributables, fill the slots in their own checked-out copy of
+# the config with the hashes of the files they downloaded, and build
+# that copy. The release ships the pristine repo installer and
+# config, never a CI copy or the CI bundle.
 
 on:
   push:
@@ -86,13 +87,20 @@ jobs:
           if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
           "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "stamp=$($f.Name -replace '_Install-Atrium\.ps1$','')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-      - name: Parse-check the installer
+      - name: Parse-check the installer and the config template
         shell: pwsh
         run: |
           $errors = $null
           [System.Management.Automation.PSParser]::Tokenize([IO.File]::ReadAllText('${{ steps.inst.outputs.file }}'), [ref]$errors) | Out-Null
           if ($errors -and $errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
-          Write-Host 'Parse OK'
+          $cfg = Import-PowerShellDataFile './Atrium-Config.psd1'
+          Write-Host "Parse OK (installer + Atrium-Config.psd1, $($cfg.Count) settings)"
+      - name: Run the config fixture battery
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          & ./tests/config-battery.ps1 -InstallerPath './${{ steps.inst.outputs.file }}' -TemplatePath './Atrium-Config.psd1' -WorkRoot (Join-Path $env:TEMP 'config-battery')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Download the redistributables
         shell: pwsh
         run: |
@@ -105,7 +113,7 @@ jobs:
       - name: Fill the redist hash slots in the CI copy
         shell: pwsh
         run: |
-          $path = '${{ steps.inst.outputs.file }}'
+          $path = './Atrium-Config.psd1'
           $text = [IO.File]::ReadAllText($path)
           $map = [ordered]@{
             PgInstallerSha256       = 'redist/postgresql-17.4-windows-x64.exe'
@@ -116,7 +124,7 @@ jobs:
           foreach ($k in $map.Keys) {
             $hash = (Get-FileHash $map[$k] -Algorithm SHA256).Hash
             $pattern = "(?m)^(\s*$k\s*=\s*)''"
-            if ($text -notmatch $pattern) { throw "Hash slot $k not found in the installer config." }
+            if ($text -notmatch $pattern) { throw "Hash slot $k not found in Atrium-Config.psd1." }
             $text = $text -replace $pattern, "`$1'$hash'"
             Write-Host "$k <- $hash"
           }
@@ -206,16 +214,18 @@ jobs:
           cat > notes.md <<'EOF'
           **Early alpha — not for production use.**
 
-          The installer for this build is attached below. The installer is
-          the release: it embeds the entire system (server, client, desktop
-          shell, database schema) and builds and deploys from the single
-          file.
+          The installer for this build is attached below, with its
+          configuration file. The installer is the release: it embeds the
+          entire system (server, client, desktop shell, database schema)
+          and builds and deploys from the single file; every environment
+          setting lives in the attached Atrium-Config.psd1, which sits
+          next to the installer.
 
           Published by the build-check workflow after a full Windows build
           of this exact installer passed — emit, compile, shell MSI, and
           bundle manifest verification.
           EOF
-          gh release create "$tag" "$INSTALLER" --title "Atrium build $STAMP (early alpha)" --notes-file notes.md --prerelease
+          gh release create "$tag" "$INSTALLER" "Atrium-Config.psd1" --title "Atrium build $STAMP (early alpha)" --notes-file notes.md --prerelease
 
   runtime-windows:
     name: Windows runtime smoke test
@@ -500,7 +510,7 @@ jobs:
       - name: Fill the redist hash slots in the CI copy
         shell: pwsh
         run: |
-          $path = '${{ steps.inst.outputs.file }}'
+          $path = './Atrium-Config.psd1'
           $text = [IO.File]::ReadAllText($path)
           $map = [ordered]@{
             PgInstallerSha256       = 'redist/postgresql-17.4-windows-x64.exe'
@@ -511,8 +521,26 @@ jobs:
           foreach ($k in $map.Keys) {
             $hash = (Get-FileHash $map[$k] -Algorithm SHA256).Hash
             $pattern = "(?m)^(\s*$k\s*=\s*)''"
-            if ($text -notmatch $pattern) { throw "Hash slot $k not found in the installer config." }
+            if ($text -notmatch $pattern) { throw "Hash slot $k not found in Atrium-Config.psd1." }
             $text = $text -replace $pattern, "`$1'$hash'"
+          }
+          [IO.File]::WriteAllText($path, $text)
+      - name: Fill the lab values in the CI config copy
+        shell: pwsh
+        run: |
+          # The Deploy configuration gate (issue #35) refuses an
+          # unedited config. LabMode exempts the CA and the archive
+          # targets (it substitutes its own); the host name and the
+          # seed password are filled here with the lab values the
+          # smoke test expects.
+          $path = './Atrium-Config.psd1'
+          $text = [IO.File]::ReadAllText($path)
+          $fills = [ordered]@{ HostName = 'atrium'; SeedAdminPassword = 'ChangeMe!2026' }
+          foreach ($k in $fills.Keys) {
+            $pattern = "(?m)^(\s*$k\s*=\s*)'__CHANGE_ME__'"
+            if ($text -notmatch $pattern) { throw "Placeholder for $k not found in Atrium-Config.psd1." }
+            $text = $text -replace $pattern, "`$1'$($fills[$k])'"
+            Write-Host "$k <- $($fills[$k])"
           }
           [IO.File]::WriteAllText($path, $text)
       - name: Run the full build (produces the bundle Deploy consumes)
@@ -529,7 +557,7 @@ jobs:
       - name: Run Deploy in lab mode
         shell: pwsh
         run: |
-          & ./${{ steps.inst.outputs.file }} -Mode Deploy -LabMode
+          & ./${{ steps.inst.outputs.file }} -Mode Deploy -LabMode -Unattended -AcceptConfigSummary
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Copy the deploy run log for upload
         if: always()
