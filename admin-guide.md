@@ -1,7 +1,7 @@
 # Atrium: Administrator Guide
 
 How to install, configure, and run an Atrium server. This guide describes the
-system as of build **261119_1952** (schema v15). Atrium is early alpha and not
+system as of build **261119_2003** (schema v15). Atrium is early alpha and not
 for production use; where a capability is planned rather than built, this guide
 says so and names the tracking issue.
 
@@ -429,7 +429,7 @@ attachment store leaves messages pointing at files that are not there.
 
 ## 12. Verification status and known limits
 
-Early alpha. What is verified as of build 261119_1952:
+Early alpha. What is verified as of build 261119_2003:
 
 - Full Build mode, the shell MSI, live-server API batteries on Windows and
   Linux, the UI battery, and a complete lab-mode Deploy (all six stages,

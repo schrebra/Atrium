@@ -24,6 +24,26 @@
 #  5. A setting that does not belong here, or a missing one, fails the
 #     run at load with the setting named. Nothing is guessed.
 #
+#  WHAT THE VALUES MUST LOOK LIKE
+#  Every text value is written inside single quotes, like this:
+#      HostName = 'atrium'
+#  The quotes are REQUIRED. A text value without quotes is not a
+#  value at all: this file will not load, and the installer stops
+#  and names the file. When you replace a value, replace only the
+#  text between the quotes and leave the quotes in place.
+#  Numbers and the true/false settings are the only values with
+#  no quotes:
+#      HttpsPort = 443
+#      AdEnabled = $false
+#  Quoting a number is equally wrong (HttpsPort = '443'): the
+#  installer checks every setting's type and refuses a quoted
+#  number by name.
+#  A filled-in file looks like this:
+#      HostName = 'atrium'
+#      CaServer = 'ca01'
+#      WalArchivePath = '\\backup01\atrium-wal'
+#      SeedAdminPassword = 'a one-off password you choose'
+#
 #  Keep one copy of this file per environment (for example
 #  Atrium-Config-Lab.psd1 and Atrium-Config-Production.psd1, chosen
 #  with the installer's -ConfigPath). Together with a database backup,
@@ -69,6 +89,7 @@
     #                 but the warning does not block: you confirm it.
     #   Values:       'Small' (up to ~100 users), 'Medium' (~500),
     #                 'Large' (~3,000). See the sizing guide above.
+    #   Example:      DeploymentTier = 'Medium'
     DeploymentTier = 'Small'
 
     # ========================================================================
@@ -92,6 +113,7 @@
     #                 installer creates (and removes on teardown).
     #   Recommended:  Leave both as 'atrium' unless your IIS already
     #                 uses those names for something else.
+    #   Example:      SiteName = 'atrium' and AppPoolName = 'atrium'
     SiteName = 'atrium'
     AppPoolName = 'atrium'
 
@@ -100,6 +122,7 @@
     #   Effect:       Users include it in the address unless it is 443.
     #   Recommended:  Leave at 443 unless another service on this
     #                 server already uses 443.
+    #   Example:      HttpsPort = 443
     HttpsPort = 443
 
     # ========================================================================
@@ -120,6 +143,7 @@
     #   Purpose:      Where the application's data-protection keys
     #                 live. Sessions and protected data depend on them.
     #   Recommended:  Leave inside InstallRoot.
+    #   Example:      KeyRingPath = 'C:\Atrium\KeyRing'
     KeyRingPath = 'C:\Atrium\KeyRing'
 
     # LogRoot
@@ -127,6 +151,7 @@
     #                 deliberately OUTSIDE InstallRoot: teardown
     #                 deletes InstallRoot, never the run log.
     #   Recommended:  Leave at 'C:\Atrium-Logs'.
+    #   Example:      LogRoot = 'C:\Atrium-Logs'
     LogRoot = 'C:\Atrium-Logs'
 
     # ========================================================================
@@ -151,6 +176,7 @@
     #   Recommended:  'WebServer' works on a standard AD CS setup. Use
     #                 a custom template name only if your PKI team
     #                 issued one for internal web servers.
+    #   Example:      CertTemplate = 'WebServer'
     CertTemplate = 'WebServer'
 
     # ========================================================================
@@ -163,6 +189,7 @@
     #                 onto the major version that wrote them, and the
     #                 installer ships the matching one.
     #   Recommended:  Do not change.
+    #   Example:      PgVersion = '17.4'
     PgVersion = '17.4'
 
     # PgPort
@@ -170,11 +197,13 @@
     #                 connections from this server only.
     #   Recommended:  Leave at 5432 unless another PostgreSQL instance
     #                 already runs on this server.
+    #   Example:      PgPort = 5432
     PgPort = 5432
 
     # PgInstallDir
     #   Purpose:      Where the PostgreSQL program files are installed.
     #   Recommended:  Leave at the default.
+    #   Example:      PgInstallDir = 'C:\Program Files\PostgreSQL\17'
     PgInstallDir = 'C:\Program Files\PostgreSQL\17'
 
     # PgDataDir
@@ -185,12 +214,14 @@
     #                 first and restored afterwards.
     #   Recommended:  Inside InstallRoot on Small/Medium. On Large,
     #                 put it on the database volume with 100 GB free.
+    #   Example:      PgDataDir = 'D:\Atrium\PgsqlData'
     PgDataDir = 'C:\Atrium\PgsqlData'
 
     # PgServiceName
     #   Purpose:      The Windows service name for PostgreSQL. Deploy
     #                 stops, removes and recreates this service.
     #   Recommended:  Leave at the default.
+    #   Example:      PgServiceName = 'postgresql-x64-17'
     PgServiceName = 'postgresql-x64-17'
 
     # DbName / DbAppUser
@@ -199,6 +230,7 @@
     #                 creates both; the app never connects as the
     #                 PostgreSQL superuser.
     #   Recommended:  Leave at the defaults.
+    #   Example:      DbName = 'atrium' and DbAppUser = 'atrium_app'
     DbName = 'atrium'
     DbAppUser = 'atrium_app'
 
@@ -233,6 +265,7 @@
     #                 partial WAL segment. 300 seconds is what makes
     #                 the 15-minute recovery point objective real.
     #   Recommended:  Leave at 300.
+    #   Example:      WalArchiveTimeoutSeconds = 300
     WalArchiveTimeoutSeconds = 300
 
     # ========================================================================
@@ -243,6 +276,7 @@
     #   Purpose:      The administrator account created on the fresh
     #                 database at first application start.
     #   Recommended:  Leave as 'admin', or pick your standard.
+    #   Example:      SeedAdminUser = 'admin'
     SeedAdminUser = 'admin'
 
     # SeedAdminPassword                                             __CHANGE_ME__
@@ -256,6 +290,7 @@
     #                 until the first rotation. Protect the file.
     #   Recommended:  Any strong one-off password. It is not the
     #                 password the account keeps.
+    #   Example:      SeedAdminPassword = 'Tr7!one-off-only'
     SeedAdminPassword = '__CHANGE_ME__'
 
     # ========================================================================
@@ -280,13 +315,13 @@
     # ========================================================================
 
     AdEnabled = $false
-    AdServer = ''                 # a domain controller, by its DNS name (must match its LDAPS certificate)
+    AdServer = ''                 # a domain controller, by its DNS name (must match its LDAPS certificate), e.g. 'dc01.corp.local'
     AdBaseDn = ''                 # e.g. 'DC=corp,DC=local'
     AdUserBaseDn = ''             # OU the sync provisions users from; empty = AdBaseDn
-    AdBindDn = ''                 # sync service account DN (read-only directory access is enough)
+    AdBindDn = ''                 # sync service account DN (read-only directory access is enough), e.g. 'CN=svc-atrium-sync,OU=Service Accounts,DC=corp,DC=local'
     AdBindPassword = ''
     AdGroupChannelMap = ''        # 'channel=AD Group;channel2=AD Group 2'
-    AdSyncIntervalHours = 24
+    AdSyncIntervalHours = 24      # hours between directory syncs
     AdAppPoolAccount = ''         # gMSA, e.g. 'CORP\svc-atrium$'; empty = ApplicationPoolIdentity
     AdKeytabPath = ''             # Linux/Kestrel only; always empty on Windows
 
@@ -304,6 +339,14 @@
     #  'validation': the gate still verifies format and fully decodes
     #  every image, but no malware signature scan runs. That tradeoff
     #  is the operator's recorded decision, not a silent fallback.
+    #   AttachmentStorePath  Where the cleared image files live.
+    #                 Example: 'D:\Atrium\Attachments' on Large.
+    #   AttachmentMaxBytes   Largest single image accepted.
+    #                 Example: 26214400 (25 MiB, as shipped).
+    #   AttachmentMaxFiles   Images per upload batch.
+    #                 Example: 10 (as shipped).
+    #   AttachmentScanner    'defender' or 'validation'.
+    #                 Example: AttachmentScanner = 'defender'
     # ========================================================================
 
     AttachmentStorePath = 'C:\Atrium\Attachments'
@@ -324,7 +367,7 @@
     # ========================================================================
 
     AlertSmtpHost = ''            # e.g. 'exchange01.corp.local'
-    AlertSmtpPort = 25
+    AlertSmtpPort = 25            # 25 as shipped; 587 on a submission relay
     AlertEmailFrom = ''           # e.g. 'atrium@corp.local'
     AlertSmtpUser = ''            # authenticated relay only
     AlertSmtpPassword = ''
@@ -336,7 +379,10 @@
     #  machines on different patch levels must not produce different
     #  bundles under one version stamp. MinShellVersion is the oldest
     #  desktop shell the server accepts; the server advertises it and
-    #  the shell enforces it.
+    #  the shell enforces it. The three values below are the current
+    #  pins and their own examples; change them only as part of a
+    #  version bump of the product itself.
+    #   Example:      DotNetSdkVersion = '10.0.100'
     # ========================================================================
 
     DotNetSdkVersion = '10.0.100'
@@ -354,6 +400,9 @@
     #  A mismatch - or an empty value - fails the build with the
     #  instruction below. To fill one in:
     #    (Get-FileHash .\redist\<filename> -Algorithm SHA256).Hash
+    #  and paste the result between the quotes:
+    #   Example:      PgInstallerSha256 = '<the 64 hex characters the
+    #                 command above prints>'
     # ========================================================================
 
     PgInstallerName = 'postgresql-17.4-windows-x64.exe'
