@@ -1,6 +1,6 @@
 # Goals
 
-Where Atrium stands, what is still needed, and in what order. Current state: **build 261119_2008**, database schema v15.
+Where Atrium stands, what is still needed, and in what order. Current state: **build 261119_2039**, database schema v15.
 
 **Status: early alpha: not for production use.** No production deployment exists; see the README's Project status section.
 
@@ -47,7 +47,7 @@ These are built and verified by construction or on substitute harnesses; each ne
 
 ## Operator tasks outstanding
 
-- [ ] Record the SHA-256 hashes of the actual redistributable installers (PostgreSQL, .NET hosting bundle, WebView2) in `Atrium-Config.psd1`: the slots ship empty by design, and the Build run's redistributable check fails until they are filled
+- [x] Record the SHA-256 hashes of the actual redistributable installers: superseded. The installer now ships the pins and downloads any missing file automatically, verifying each against its pin; no operator hash step exists
 - [ ] Confirm the build machine carries exactly SDK 10.0.100 and WiX 7.0.1, or update the pins deliberately
 
 ## Open engineering items

@@ -23,7 +23,7 @@ function Fail-Run { param([string]$Stage, [string]$Message) throw "[$Stage] $Mes
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($InstallerPath, [ref]$tokens, [ref]$errors)
 if ($errors -and $errors.Count) { throw "installer does not parse: $($errors[0].Message)" }
-$wantedData = @('$script:ConfigSpec', '$script:BundleVersion', '$script:SchemaVersion')
+$wantedData = @('$script:ConfigSpec', '$script:BundleVersion', '$script:SchemaVersion', '$script:Redistributables')
 $assigns = $ast.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     $n.Left.Extent.Text -in $wantedData }, $true)
@@ -31,7 +31,7 @@ foreach ($a in $assigns) { . ([scriptblock]::Create($a.Extent.Text)) }
 $wantedFuncs = @('Read-AtriumConfig', 'Get-MissingConfigValues',
                  'Open-ConfigEditor', 'Invoke-ConfigGate', 'Show-ConfigSummary',
                  'Confirm-ConfigSummary', 'Compare-HardwareTier', 'Resolve-DefenderPath',
-                 'Test-ScannerPrecondition')
+                 'Test-ScannerPrecondition', 'Resolve-Redistributable')
 $defs = $ast.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
     $n.Name -in $wantedFuncs }, $true)
@@ -173,7 +173,7 @@ $driver = Join-Path $WorkRoot 'gate-driver.ps1'
 param([string]$InstallerPath, [string]$FixturePath, [string]$CallsPath)
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($InstallerPath, [ref]$tokens, [ref]$errors)
-$wantedData = @('$script:ConfigSpec', '$script:BundleVersion', '$script:SchemaVersion')
+$wantedData = @('$script:ConfigSpec', '$script:BundleVersion', '$script:SchemaVersion', '$script:Redistributables')
 $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -in $wantedData }, $true) | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
 $wantedFuncs = @('Read-AtriumConfig', 'Get-MissingConfigValues', 'Open-ConfigEditor', 'Invoke-ConfigGate')
 $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $wantedFuncs }, $true) | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }
@@ -210,6 +210,26 @@ Copy-Item $TemplatePath $gateFixture2
 $out = "Q`n" | & $pwsh -NoProfile -File $driver -InstallerPath $InstallerPath -FixturePath $gateFixture2 -CallsPath $callsFile 2>&1
 Check 'gate loop Q exits the installer (code 1)' ($LASTEXITCODE -eq 1) "exit=$LASTEXITCODE out=$($out -join ' | ')"
 Check 'gate loop Q changed nothing' ((Get-Content $gateFixture2 -Raw) -eq $templateText)
+
+# ---- Redistributable pins -------------------------------------------------
+foreach ($nameKey in @('PgInstallerName', 'HostingBundleName', 'WebView2InstallerName', 'IisAdminModuleName')) {
+    $pin = @($script:Redistributables | Where-Object { $_.Name -eq $cfgT[$nameKey] }) | Select-Object -First 1
+    Check "pin shipped for $nameKey" ($null -ne $pin -and $pin.Sha256 -match '^[0-9A-F]{64}$' -and $pin.Urls.Count -ge 1 -and $pin.Urls[0] -like 'https://*') "pin: $($pin | Out-String)"
+}
+$fxRedist = Join-Path $WorkRoot 'redist-fixture'
+New-Item -ItemType Directory -Path $fxRedist | Out-Null
+$fxFile = Join-Path $fxRedist 'fixture.exe'
+Set-Content -Path $fxFile -Value 'fixture-bytes' -NoNewline
+$fxHash = (Get-FileHash -Path $fxFile -Algorithm SHA256).Hash
+$fxPins = @(@{ Name = 'fixture.exe'; Sha256 = $fxHash; Urls = @() })
+Check 'resolve returns a present file whose hash matches the pin' ((Resolve-Redistributable -Name 'fixture.exe' -RedistDir $fxRedist -Pins $fxPins) -eq $fxFile)
+$fxBadPins = @(@{ Name = 'fixture.exe'; Sha256 = ('0' * 64); Urls = @() })
+$threw = $null
+try { $null = Resolve-Redistributable -Name 'fixture.exe' -RedistDir $fxRedist -Pins $fxBadPins } catch { $threw = $_.Exception.Message }
+Check 'resolve refuses a present file whose hash does not match the pin' ($null -ne $threw -and $threw -match 'does not match the pin') "got: $threw"
+$threw = $null
+try { $null = Resolve-Redistributable -Name 'unknown.exe' -RedistDir $fxRedist -Pins $fxPins } catch { $threw = $_.Exception.Message }
+Check 'resolve fails loud for a name with no pin' ($null -ne $threw -and $threw -match 'No redistributable pin') "got: $threw"
 
 Write-Host ""
 Write-Host "config-battery: $script:Failures failure(s)"

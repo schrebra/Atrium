@@ -284,8 +284,10 @@
     #                 Because the value ships in this file, the account
     #                 is created flagged must-change-password: it can
     #                 sign in but can do nothing except rotate the
-    #                 password, and the Deploy smoke test rotates it to
-    #                 a generated value automatically.
+    #                 password. Deploy's smoke test exercises that
+    #                 rotation and then restores the seeded state, so
+    #                 the operator's first sign-in performs the real
+    #                 rotation and this value stops working.
     #   Effect:       This file contains a live (if one-shot) secret
     #                 until the first rotation. Protect the file.
     #   Recommended:  Any strong one-off password. It is not the
@@ -390,19 +392,19 @@
     MinShellVersion = '0.1.0'
 
     # ========================================================================
-    #  REDISTRIBUTABLE FILES AND THEIR SHA-256 CHECKS
+    #  REDISTRIBUTABLE FILES
     #  The named files live in a redist folder next to the script;
     #  Build copies the whole folder into the bundle and Deploy
-    #  installs from the bundle. Before Build uses any of them, it
-    #  checks the file's SHA-256 against the value here: the bundle
+    #  installs from the bundle. Each file is verified against the
+    #  SHA-256 pin shipped inside the installer itself: the bundle
     #  manifest alone only proves the bundle matches itself, not that
     #  the PostgreSQL installer inside it is the genuine pinned build.
-    #  A mismatch - or an empty value - fails the build with the
-    #  instruction below. To fill one in:
-    #    (Get-FileHash .\redist\<filename> -Algorithm SHA256).Hash
-    #  and paste the result between the quotes:
-    #   Example:      PgInstallerSha256 = '<the 64 hex characters the
-    #                 command above prints>'
+    #  There is nothing to record here and no hash to fill in. A file
+    #  already in the redist folder is verified and used. A missing
+    #  file is downloaded from its official location and accepted
+    #  only when its hash matches the pin. If every download fails,
+    #  Build stops and names the file, its download locations, the
+    #  expected hash, and the folder to place the file in.
     # ========================================================================
 
     PgInstallerName = 'postgresql-17.4-windows-x64.exe'
@@ -410,9 +412,4 @@
     WebView2InstallerName = 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
     IisAdminModuleName = 'IISAdministration.1.1.0.0.nupkg'
     IisAdminModuleVersion = '1.1.0.0'
-
-    PgInstallerSha256 = ''
-    HostingBundleSha256 = ''
-    WebView2InstallerSha256 = ''
-    IisAdminModuleSha256 = ''
 }

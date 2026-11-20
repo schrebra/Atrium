@@ -85,9 +85,22 @@ $cfg = $null
 try { $cfg = Import-PowerShellDataFile $configPath } catch { }
 Check 'contract: Atrium-Config.psd1 parses' ($null -ne $cfg)
 
-foreach ($slot in @('PgInstallerSha256', 'HostingBundleSha256', 'WebView2InstallerSha256', 'IisAdminModuleSha256')) {
-    Check "contract: hash slot line shape ($slot)" ($configText -match "(?m)^\s*$slot = ''") 'the workflow fill step rewrites this exact line shape in its CI copy'
+# Redistributable pins: the installer ships the expected SHA-256 and the
+# download locations for every redistributable, keyed by the file names
+# the template configures. No hash is recorded in the config file.
+$pinsNode = $ast.Find({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq '$script:Redistributables' }, $true)
+$script:Redistributables = $null
+if ($null -ne $pinsNode) { . ([scriptblock]::Create($pinsNode.Extent.Text)) }
+Check 'contract: installer ships redistributable pins' ($null -ne $script:Redistributables -and @($script:Redistributables).Count -eq 4)
+if ($null -ne $script:Redistributables -and $null -ne $cfg) {
+    foreach ($nameKey in @('PgInstallerName', 'HostingBundleName', 'WebView2InstallerName', 'IisAdminModuleName')) {
+        $pin = @($script:Redistributables | Where-Object { $_.Name -eq $cfg[$nameKey] }) | Select-Object -First 1
+        Check "contract: pin for the configured $nameKey" ($null -ne $pin -and $pin.Sha256 -match '^[0-9A-F]{64}$' -and $pin.Urls.Count -ge 1 -and $pin.Urls[0] -like 'https://*')
+    }
 }
+Check 'contract: workflow has no hash-slot fill step' (-not $workflowText.Contains('Fill the redist hash slots')) 'the pins ship in the installer; nothing fills hash slots'
 foreach ($line in @("HostName = '__CHANGE_ME__'", "SeedAdminPassword = '__CHANGE_ME__'")) {
     Check "contract: lab fill target present ($line)" ($configText.Contains($line)) 'the deploy job rewrites this line in its CI copy'
 }

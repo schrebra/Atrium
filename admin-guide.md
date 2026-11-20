@@ -1,478 +1,751 @@
-# Atrium: Administrator Guide
+# Atrium Administrator Guide
 
-How to install, configure, and run an Atrium server. This guide describes the
-system as of build **261119_2008** (schema v15). Atrium is early alpha and not
-for production use; where a capability is planned rather than built, this guide
-says so and names the tracking issue.
+**Product:** Atrium (self-hosted team chat for internal networks)
+**Applies to:** build **261119_2039**, schema v15
+**Status:** Early alpha. This release is not for production use. Where a
+capability is planned rather than implemented, this guide states that and
+names the tracking issue.
+
+This guide is the operator reference for installing, configuring, and
+running an Atrium server. It describes exactly what the software does. If
+a procedure in this guide disagrees with the installer's behavior, the
+installer is correct and the guide is in error: file an issue.
+
+**Conventions used in this guide**
+
+- `<stamp>` is the build stamp in the installer file name, in the format
+  `YYMMDD_HHMM` (for example, `261119_2039_Install-Atrium.ps1`).
+- Commands are shown exactly as they are to be typed.
+- **Note** marks information that prevents a common mistake. **Warning**
+  marks an action that destroys data or removes access if performed as
+  described at the wrong time.
 
 ---
 
-## 1. What Atrium is
+## 1. Product overview
 
-Atrium is a self-hosted team chat system for a single organization of any size:
-a small office or thousands of users. It runs **fully offline** on your own
-network: no cloud service, no external account, no telemetry, nothing phones
-home. One PowerShell script installs the whole system on one Windows Server,
-and the person who runs it stays in control of it: every component is on the
-machine, every version is pinned, and the installer can be read end to end.
+Atrium is a self-hosted team chat system for a single organization of any
+size, from a small office to thousands of users. It runs fully offline on
+the organization's own network: it requires no cloud service, no external
+account, and no internet connection at run time, and it sends no
+telemetry.
 
-Think of it as the company lobby: people sign in with their work account, and
-from that one front door they reach chat, direct messages, threads, picture
-sharing, and search. (The name is literal: an atrium is the central room of a
-building that everything else branches off from.)
+One PowerShell script installs the complete system on one Windows Server.
+Every component runs on that server, every component version is pinned,
+and the installer is a single readable file.
 
-What it deliberately is not: a cloud product, a multi-tenant service, or a
-general-purpose platform. Message formatting is plain text with hyperlinks:
-no Markdown, no emoji (the server rejects emoji-bearing messages), no
-reactions. Those are design decisions, not missing features.
+The name is literal: an atrium is the central room of a building, the
+space everyone passes through to reach the rooms that branch off it.
+Users sign in once and reach channels, direct messages, threads, picture
+sharing, and search from that one entry point.
 
-## 2. Feature set
+Atrium is not a cloud product, not a multi-tenant service, and not a
+general-purpose platform. Message formatting is plain text with
+hyperlinks. There is no Markdown support, no emoji support (the server
+rejects any message that contains an emoji character, with an error shown
+to the sender), and no reaction feature. These are design decisions, not
+missing features.
 
-**For users**
+## 2. Feature summary
 
-- Channels and direct messages, with live delivery (SignalR) and persisted
-  history
-- One-level threads on any message, with explicit follow state and per-thread
-  unread tracking
-- Presence computed from live connections: a user whose client has not
-  checked in for 150 seconds reads as offline, even if their socket is open
-- Action center: notifications for DMs, channel activity, mentions, being
-  added to a channel, followed threads, and system alerts (30-day retention)
-- Full-text search across every channel the user belongs to
-- Picture sharing through a scan gate (see §10): inline thumbnails, a lightbox
-  viewer with zoom, and a gallery with All / by-month / calendar views
-- Message editing and deletion, governed by policy (see §6)
-- Three view modes, including multiple identical pop-out windows, each a full
-  client
-- Sign-in with local accounts, or with Active Directory via Kerberos/Negotiate
+### 2.1 User features
 
-**For administrators**
+- Channels and direct messages, with live delivery (SignalR) and
+  persisted history
+- Threads: one level of replies on any message, with explicit follow
+  state and per-thread unread tracking
+- Presence, computed from live connection state at read time: a user
+  whose client has not reported activity for 150 seconds is shown as
+  offline, even if the connection is still open
+- Action center: notifications for direct messages, channel activity,
+  mentions, channel additions, followed threads, and system alerts,
+  retained for 30 days
+- Full-text search across every channel the signed-in user belongs to
+- Picture sharing through the scan gate (§10): inline thumbnails, a
+  lightbox viewer with zoom, and a gallery with All, by-month, and
+  calendar views
+- Message editing and deletion, governed by policy (§6.3)
+- Three view modes, including multiple identical pop-out windows, each a
+  complete client
+- Sign-in with local accounts, or with Active Directory through
+  Kerberos/Negotiate (§8)
 
-- A web admin console (Audit, Jobs, Users & Access, Settings, History,
-  Resources, Health, Alerts): see §6
-- Grouped, atomic settings changes with a full snapshot history and rollback
-- Per-user and per-channel overrides for message edit/delete policy
-- Resource monitoring (CPU in core equivalents, memory, disk, database) with
-  history
-- Transition-only alerting to the action center, a system channel, and email
-- An append-only audit log and a one-click diagnostics bundle
-- AD synchronization of users and group-to-channel membership
+### 2.2 Administrator features
 
-## 3. Components
+- A web administration console (§6): Audit, Jobs, Users & Access,
+  Settings, History, Resources, Health, and Alerts
+- Grouped, atomic settings changes, with a complete snapshot history and
+  rollback to any snapshot
+- Per-user and per-channel overrides for the message edit and delete
+  policies
+- Resource monitoring: CPU in core equivalents, memory, disk, and
+  database, with history
+- Transition-only alerting to the action center, to a system channel, and
+  by email
+- An append-only audit log and a one-action diagnostics bundle export
 
-| Component | What it is | Where it runs |
+## 3. System components
+
+| Component | Description | Location |
 |---|---|---|
-| Installer | One PowerShell script (`<stamp>_Install-Atrium.ps1`) containing the entire system as embedded sources | Operator's machine (Build), the server (Deploy) |
-| Atrium server | ASP.NET Core (.NET 10) web app: API, SignalR hub, background services (resource sampler, AD sync, alert evaluator) | IIS on the server VM |
-| Database | PostgreSQL 17.4: all messages, users, settings, audit, and state | Same VM (co-located by design) |
-| Web client | Blazor WebAssembly app served by the server | Any modern browser on the LAN |
-| Desktop shell | WPF/WebView2 wrapper around the web client, shipped as a versioned MSI | User workstations, deployed by GPO |
-| Attachment store | Content-addressed (SHA-256) file store outside the web root | Server filesystem |
+| Installer | One PowerShell script, `<stamp>_Install-Atrium.ps1`, containing the entire system as embedded source code | Operator workstation (Build mode); the server (Deploy mode) |
+| Atrium server | ASP.NET Core application (.NET 10): HTTP API, SignalR hub, and the background services (resource sampler, AD sync, alert evaluator) | IIS on the server |
+| Database | PostgreSQL 17.4: messages, users, settings, audit records, and all other state | The same server (co-located by design) |
+| Web client | Blazor WebAssembly application served by the Atrium server | Any current browser on the network |
+| Desktop shell | WPF/WebView2 wrapper for the web client, distributed as a versioned MSI | User workstations, deployed by Group Policy (§7) |
+| Attachment store | Content-addressed file store (SHA-256), outside the web root | Server file system |
 
-The topology is deliberately a **single VM**: IIS and PostgreSQL together.
-Availability rests on VM backup plus PostgreSQL WAL archiving to an off-VM
-target and a rehearsed restore, not on clustering.
+The supported topology is a single server: IIS and PostgreSQL on one
+machine. Availability rests on virtual machine backup, PostgreSQL WAL
+archiving to an off-server target, and a rehearsed restore (§9). Atrium
+does not cluster.
 
-## 4. How the installer works
+**Terms used in this guide**
 
-Everything ships as one script. It has two modes:
+- **Bundle**: the output of Build mode. A folder containing the
+  application payload, the database schema, the redistributables, the
+  configuration file, and `manifest.json`, which records the SHA-256 of
+  every file in the folder.
+- **Redistributable**: one of the four third-party installers the bundle
+  carries (§4.2).
+- **Configuration gate**: the check Deploy runs before changing anything,
+  which refuses to proceed while the configuration file contains
+  placeholder values (§4.3).
+- **Seed admin**: the first administrator account, created by Deploy with
+  the password from the configuration file (§5.4).
 
-- **Build mode** compiles the system and assembles an **offline bundle**: a
-  folder containing the application payload, the database schema, and every
-  redistributable the deployment needs, plus a `manifest.json` hashing every
-  file. Once the bundle exists, no network is needed again.
-- **Deploy mode** takes a bundle and builds a complete server from it,
-  destroying whatever deployment was there before (see §9).
+## 4. The installer, the bundle, and the configuration file
 
-**Redistributables** (in a `redist` folder next to the script at Build time;
-all four are pinned and SHA-256-verified before they are used):
+### 4.1 Modes
 
-1. PostgreSQL 17.4 Windows installer
-2. .NET 10 Hosting Bundle
-3. Microsoft Edge WebView2 Runtime installer
-4. The IISAdministration PowerShell module package (1.1.0.0), which Deploy
-   uses to manage IIS
+The installer has two modes.
 
-**Configuration is a separate file: `Atrium-Config.psd1`.** Every
-environment value (hostname, ports, paths, certificate template, database
-names, seed admin, AD settings, SMTP relay, and the SHA-256 slots) lives in
-a commented PowerShell data file next to the installer: values and
-comments only, never code, so an operator never edits a script. Each
-setting's comment states its purpose, the effect of getting it wrong, and
-a recommendation; a sizing table at the top covers the Small / Medium /
-Large deployment tiers. Keep one copy per environment and select it with
-`-ConfigPath` (for example `Atrium-Config-Production.psd1`). A file with an
-unknown, missing, or wrongly-typed setting fails at load with the setting
-named: nothing is guessed.
+- **Build** compiles the system and assembles the bundle. After Build
+  completes, deployment requires no network access.
+- **Deploy** takes a bundle and constructs a complete server from it.
+  Deploy destroys any existing Atrium deployment on the target server
+  before it builds (§9.1). A third mode, **Restore**, is planned as part
+  of issue #16 and does not exist in this build.
 
-Deploy protects that file with an **unskippable configuration gate**. If
-any must-change value (hostname, CA server, WAL archive target, base
-backup target, seed admin password) still holds the shipped
-`__CHANGE_ME__` placeholder, Deploy opens the file in Notepad in front of
-the operator, waits, re-reads it, and loops (naming what is still
-missing) until the configuration is complete. The gate judges values,
-not bytes: the template's comments and examples can be edited freely
-without affecting the installer. The only exits are a completed configuration or exiting the
-installer. After the gate, Deploy prints the **effective configuration**
-(every value; secrets shown as set/not-set, never as values) and requires
-typing `YES` before Stage 1. Automation uses `-Unattended` (the gate
-condition becomes an immediate, named failure instead of the editor) plus
-`-AcceptConfigSummary` (asserts the logged summary was reviewed); neither
-switch ever produces a silent pass. Preflight also compares the server's
-cores, RAM, and free disk against the declared `DeploymentTier` and prints
-loud warnings on a shortfall.
+### 4.2 Redistributables
 
-**Before your first Build**, record the SHA-256 of each of your redist files
-in its config slot:
+Build requires four redistributable files. They are carried in a folder
+named `redist` next to the installer script, and Build copies the folder
+into the bundle.
 
-```powershell
-(Get-FileHash .\redist\postgresql-17.4-windows-x64.exe -Algorithm SHA256).Hash
-```
+| File | Contents |
+|---|---|
+| `postgresql-17.4-windows-x64.exe` | PostgreSQL 17.4 installer |
+| `dotnet-hosting-10.0.0-win.exe` | .NET 10 Hosting Bundle |
+| `MicrosoftEdgeWebView2RuntimeInstallerX64.exe` | Microsoft Edge WebView2 Runtime installer |
+| `IISAdministration.1.1.0.0.nupkg` | IISAdministration PowerShell module 1.1.0.0, used by Deploy to manage IIS |
 
-An empty or mismatched slot fails the build loudly, by design (issue #8 tracks
-this operator step). The repository copy ships with all four slots empty;
-GitHub Actions fills them in its own copy from the files it downloads.
+Acquisition and verification are automatic. The installer ships, for each
+file, the SHA-256 of the genuine file (the **pin**) and its official
+download location. For each file, Build does exactly one of the following:
 
-**Air-gapped and classified deployments.** Nothing site-specific is baked
-into the installer or the bundle: both are identical for every environment,
-and the shipped config template carries only placeholders. That separation
-is what makes a cross-domain deployment work. Build and prepare on the
-unclassified side with the pristine template, and transfer only the
-value-free artifacts (the installer, the bundle, the redistributables, and
-the template). The target network's values are authored on the target
-network, in that network's own config file: the configuration gate runs
-locally at Deploy and refuses to proceed until the placeholders are replaced
-there, so the target network's values never need to exist on the
-unclassified side. If the person running the install does not hold the
-values, the team that does prepares the config file on the target network
-and hands it over as a file; the gate checks completeness, not authorship.
-Build the transfer bundle with the pristine template next to the script:
-Build copies the config file into the bundle, so building beside a filled-in
-lab config would carry that environment's values inside it. The
-redistributable SHA-256 slots double as transfer verification: hash the
-files before transfer, hash them again after, and record the results in the
-target network's config file. Once filled in, a config file describes the
-network it belongs to (its topology, plus a one-shot seed password): treat
-it, the installer run logs (which print the effective configuration with
-secrets masked), and any configuration export as material of that network,
-and do not carry them back across the boundary.
+1. If the file is present in `redist`, Build computes its SHA-256 and
+   compares it with the pin. On a match, the file is used. On a mismatch,
+   Build stops and names the file, the actual hash, and the expected
+   hash. A mismatched file is never used and never overwritten.
+2. If the file is absent, Build downloads it from its official location
+   and computes its SHA-256. On a match, the file is placed in `redist`
+   and used. On a mismatch, the download is discarded.
+3. If the file is absent and every download fails or mismatches, Build
+   stops and prints the manual action: the file name, the download
+   locations, the expected SHA-256, and the folder to place the file in.
+   Place the file and run Build again.
+
+No operator records a hash anywhere. There is no hash setting in the
+configuration file.
+
+### 4.3 The configuration file
+
+All environment-specific values are held in one file, `Atrium-Config.psd1`,
+stored next to the installer. The file is a PowerShell data file: values
+and comments only, never executable code. An operator never edits the
+installer script.
+
+The file contains 50 settings: hostname, ports, paths, certificate
+template, database names, the seed admin, Active Directory settings, the
+SMTP relay, and the build tool pins. Every setting carries a comment
+stating its purpose, the effect of an incorrect value, a recommendation,
+and an example. A sizing table at the top of the file defines the Small,
+Medium, and Large deployment tiers.
+
+Rules enforced when the file is loaded:
+
+- A setting that is missing, unknown to the installer, or of the wrong
+  type (for example, a number in quotes) stops the run. The message names
+  the setting. No value is ever guessed or defaulted silently.
+- Text values must be in single quotes. Numbers and `$true` / `$false`
+  must not be quoted.
+
+Keep one configuration file per environment (for example,
+`Atrium-Config-Production.psd1` and `Atrium-Config-Lab.psd1`) and select
+it with the `-ConfigPath` parameter. The default is `Atrium-Config.psd1`
+next to the script.
+
+Build copies the configuration file into the bundle root. Deploy reads
+the configuration file next to the script it is run from, not the copy in
+the bundle.
+
+### 4.4 The configuration gate
+
+Deploy runs the configuration gate after it opens its run log and before
+it changes anything on the server.
+
+Five settings are designated **must-change**: `HostName`, `CaServer`,
+`WalArchivePath`, `BaseBackupPath`, and `SeedAdminPassword`. In the
+shipped template, each holds the placeholder value `__CHANGE_ME__`.
+
+If any must-change setting still holds the placeholder, the gate does the
+following, in order:
+
+1. It prints the names of the settings that are still missing.
+2. It opens the configuration file in Notepad and waits for Notepad to
+   close.
+3. It reloads the file and checks again.
+
+Steps 1 to 3 repeat until no must-change setting holds the placeholder.
+The operator's only other exit is to close the installer, which changes
+nothing on the server. The gate cannot be skipped. The gate judges
+values, not file bytes: editing the template's comments or examples has
+no effect on the gate.
+
+Two settings modify this behavior in lab mode (`-LabMode`, §5.5):
+`CaServer`, `WalArchivePath`, and `BaseBackupPath` are exempt, because
+lab mode substitutes its own values for them. `HostName` and
+`SeedAdminPassword` are gated in every mode. If `AdEnabled` is `$true`,
+the Active Directory settings (`AdServer`, `AdBaseDn`, `AdBindDn`,
+`AdBindPassword`, `AdGroupChannelMap`) must also be non-empty, or the
+gate names them as missing.
+
+After the gate passes, Deploy prints the **effective configuration**:
+every setting and its final value, with passwords shown as `set` or
+`not set`, never as values. Deploy then requires the operator to type
+`YES` before Stage 0 runs. Any other input ends the run with nothing
+changed.
+
+For unattended runs, two parameters replace the interactive steps, and
+neither produces a silent pass:
+
+- `-Unattended`: a gate failure or an unconfirmed summary is an immediate
+  error that names the cause, instead of opening the editor or prompting.
+- `-AcceptConfigSummary`: asserts that the operator has reviewed the
+  effective configuration printed in the run log. Deploy without this
+  parameter in unattended mode fails.
+
+### 4.5 Air-gapped and classified deployments
+
+Nothing site-specific is compiled into the installer or the bundle. Both
+are byte-identical for every environment, and the shipped configuration
+template contains only placeholders. A cross-domain deployment therefore
+works as follows:
+
+1. On the unclassified side, prepare with the pristine template and build
+   the transfer bundle (§4.2, step order in §5.2). **Note:** Build copies
+   the configuration file into the bundle. Build the transfer bundle with
+   the pristine template next to the script. Building beside a filled-in
+   configuration file places that environment's values inside the bundle.
+2. Transfer only the value-free artifacts: the installer, the bundle, the
+   redistributables, and the pristine template.
+3. On the target network, author that network's values in that network's
+   own configuration file. The configuration gate runs locally at Deploy
+   and refuses to proceed until the placeholders are replaced there. The
+   target network's values never need to exist on the unclassified side.
+4. If the person running the install does not hold the values, the team
+   that does prepares the configuration file on the target network and
+   hands it over as a file. The gate checks completeness, not authorship.
+5. Redistributable verification is automatic on the target side as well:
+   Build verifies each file against the pin shipped in the installer
+   (§4.2), which also serves as the transfer integrity check.
+
+A filled-in configuration file describes the network it belongs to: its
+topology and a one-shot seed password. The installer run logs print the
+effective configuration (passwords masked). Treat a filled-in
+configuration file, the run logs, and any configuration export as
+material of the network they describe. Do not carry them back across the
+boundary.
 
 ## 5. Installing a server
 
-**Prerequisites**
+### 5.1 Prerequisites
 
-- Windows Server, administrator access. **Verified version: Windows Server
-  2022**: GitHub Actions runs the full Build, both runtime batteries, and a
-  lab-mode Deploy on Server 2022 for every build. Windows Server 2025 is
-  expected to work but is not yet CI-verified. Server 2019 and earlier are not
-  verified targets; Deploy's Stage 0 asserts a Windows Server OS and fails on
-  anything else, but only 2022 carries a verification claim.
-- PowerShell 7 (`pwsh`): Deploy asserts this in its first stage and fails
-  loudly under Windows PowerShell 5.1. (A 5.1 bootstrap launcher that installs
-  the bundled PowerShell 7 automatically is planned; see issue #34.)
-- Microsoft Defender, when the attachment scanner is `defender` (the shipped
-  default for `AttachmentScanner` in `Atrium-Config.psd1`): Stage 0 checks
-  that `MpCmdRun.exe` resolves (the in-box Windows Defender copy or a
-  Defender Platform copy under ProgramData) and fails with the fix named if
-  it does not, because the server will not start without it. If your
-  organization does not allow Microsoft Defender, set `AttachmentScanner` to
-  `validation` instead: the scan gate still runs on every upload (format
-  verification plus a full decode, with the pixel cap), but no malware
-  signature scan is performed. No setting turns the gate off; choosing
+Verify every item in this list before running Deploy. Stage 0 of Deploy
+checks most of them and stops, naming the failed check, if one does not
+hold.
+
+- **Operating system: Windows Server 2022.** This is the verified
+  version: the project's continuous integration runs the full Build, both
+  runtime test batteries, and a lab-mode Deploy on Windows Server 2022
+  for every build. Windows Server 2025 is expected to work and is not yet
+  verified. Windows Server 2019 and earlier are not supported targets.
+  Stage 0 requires a Windows Server operating system and fails on
+  anything else.
+- **Administrator rights** on the server, in an elevated PowerShell
+  session.
+- **PowerShell 7** (`pwsh`) on the server. Stage 0 asserts the version
+  and fails immediately under Windows PowerShell 5.1. A bootstrap
+  launcher that installs the pinned PowerShell 7 automatically is
+  planned (issue #34) and does not exist in this build.
+- **Microsoft Defender, if the attachment scanner is `defender`.**
+  `defender` is the shipped default for the `AttachmentScanner` setting.
+  With that setting, Stage 0 resolves `MpCmdRun.exe` exactly as the
+  server does (the in-box copy under
+  `%ProgramFiles%\Windows Defender`, or the newest Platform copy under
+  `%ProgramData%\Microsoft\Windows Defender\Platform`) and fails if it
+  cannot be resolved, because the server will not start without it. If
+  your organization does not permit Microsoft Defender, set
+  `AttachmentScanner` to `validation` in the configuration file before
+  Deploy. The scan gate (§10) then still verifies the format of every
+  uploaded picture and fully decodes it, but performs no malware
+  signature scan. No setting disables the scan gate. Selecting
   `validation` is a recorded operator decision to run without signature
   scanning.
-- For production: an Active Directory Certificate Services CA reachable for
-  certificate enrollment (template `WebServer` by default), and off-VM targets
-  for WAL archives and base backups
-- More than 10 GB free on the install drive
+- **For production Deploy:** an Active Directory Certificate Services CA
+  reachable from the server (TCP port 135 to the CA host) for certificate
+  enrollment, using the template named by `CertTemplate` (`WebServer` by
+  default); and off-server targets for `WalArchivePath` and
+  `BaseBackupPath`.
+- **Disk space:** more than 10 GB free on the install drive. Stage 0
+  also compares the server's processor cores, memory, and free disk
+  against the `DeploymentTier` declared in the configuration file and
+  prints a `HARDWARE WARNING` line in the run log for each shortfall.
+  This comparison is a warning only; the run continues.
 
-**Steps**
+### 5.2 Procedure
 
-1. Edit `Atrium-Config.psd1` for your environment (hostname, paths, CA,
-   backup targets, AD and SMTP settings if used). Or skip this and let
-   Deploy's configuration gate open the file for you (see §4).
-2. Place the four redistributables in `redist\` next to the script and record
-   their SHA-256 hashes in `Atrium-Config.psd1` (see §4).
-3. Run `.\<stamp>_Install-Atrium.ps1 -Mode Build`. This produces the
-   `Atrium-Bundle` folder, verified against its manifest.
-4. Copy the bundle to the server (or run on the server itself).
-5. On the server, run `.\<stamp>_Install-Atrium.ps1 -Mode Deploy` from the
-   bundle's location, elevated.
-6. Sign in with the seed admin (`admin` / the password in your config copy)
-   and complete the forced password change (see below).
+Perform these steps in order.
 
-**What Deploy does, stage by stage**
+**Step 1: Edit the configuration file.**
+Edit `Atrium-Config.psd1` for the target environment: hostname, paths,
+CA, backup targets, and the Active Directory and SMTP settings if they
+are used. This step may be skipped: if any must-change value is still a
+placeholder at Deploy time, the configuration gate (§4.4) opens the file
+and waits.
 
-| Stage | Does | Verifies |
+**Step 2: Build the bundle.**
+Run, from the folder containing the installer:
+
+```powershell
+.\<stamp>_Install-Atrium.ps1 -Mode Build
+```
+
+Build acquires and verifies the redistributables (§4.2), compiles the
+system, and assembles the `Atrium-Bundle` folder.
+*Expected result:* the run ends with the bundle verified against its own
+manifest, and the run log states the number of hashed files.
+
+**Step 3: Copy the bundle to the server.**
+Copy the `Atrium-Bundle` folder and the installer script to the server,
+or run the remaining steps on the build machine if it is the server.
+
+**Step 4: Run Deploy on the server.**
+In an elevated PowerShell 7 session on the server, run:
+
+```powershell
+.\<stamp>_Install-Atrium.ps1 -Mode Deploy
+```
+
+Deploy runs the configuration gate (§4.4), prints the effective
+configuration, and requires the operator to type `YES`. It then executes
+Stages 0 to 5 (§5.3).
+**Warning:** Deploy destroys any existing Atrium deployment on the
+server, including its database and all of its data. Preserve anything
+required first (§9).
+*Expected result:* the run ends with the Stage 5 result line beginning
+`SMOKE OK`, and `https://<hostname>/health` returns a healthy response.
+
+**Step 5: Sign in and rotate the seed admin password.**
+Sign in as the seed admin (§5.4) with the password from the configuration
+file. The account can do nothing except change its password. Set the
+permanent administrator password. The configuration file's seed value
+stops working at that moment.
+
+### 5.3 What Deploy does, stage by stage
+
+Deploy executes six stages in order. A stage runs only if the previous
+stage passed. If any check in a stage fails, the run stops, the run log
+names the stage and the failed check, and no later stage runs.
+
+| Stage | Actions | Verification performed |
 |---|---|---|
-| 0 Preflight | Checks admin rights, Windows Server, PowerShell 7, CA reachability, disk space; verifies every bundle file against the manifest; installs the pinned IISAdministration module if missing (bundle copy first, then the PowerShell Gallery (hash-verified either way)) | Nothing has been changed if any check fails |
-| 1 Teardown | Removes the previous deployment completely: IIS site and app pool, PostgreSQL service and data, install folder, prior certificate | Nothing of the old deployment remains |
-| 2 Certificate | Enrolls a certificate from AD CS (or, in lab mode, creates a self-signed one) | SAN matches the hostname, private key present, >30 days to expiry |
-| 3 Database | Installs PostgreSQL unattended, hardens its configuration (WAL archiving on), creates the database and the least-privilege app role, applies the schema | Schema version probe; takes the first base backup and confirms no password leaked into the run log |
-| 4 Application | Installs the hosting bundle and IIS features, copies the payload, writes production configuration, creates the app pool (AlwaysRunning, no idle timeout) and the HTTPS site (SNI binding, auto-start, preload) | `https://<hostname>/health` returns ok |
-| 5 Smoke test | Signs in as the seed admin, proves the must-change gate, rotates the password to a per-run generated one, creates a channel, posts the first message, proves emoji rejection | Message row and cleared password flag read back from PostgreSQL |
+| 0 Preflight | Checks administrator rights, the operating system, and the PowerShell version. Verifies every bundle file against `manifest.json`. Checks CA reachability (skipped in lab mode) and free disk space. Runs the hardware tier comparison (§5.1). Runs the attachment scanner precondition (§5.1). Installs the pinned IISAdministration module if it is absent: the bundle copy first, then the PowerShell Gallery package; either source is accepted only if its SHA-256 matches the pin shipped in the installer. | If any check fails, nothing on the server has been changed. |
+| 1 Teardown | Removes the previous deployment completely: the IIS site and application pool, the PostgreSQL service, data directory, and installation, the install folder, and any prior certificate for the Atrium hostname. | Nothing of the previous deployment remains. |
+| 2 Certificate | Production: enrolls a certificate from AD CS. Lab mode: creates a self-signed certificate and trusts it on the server. | The certificate's subject alternative name matches the hostname, a private key is present, and expiry is more than 30 days out. |
+| 3 Database | Installs PostgreSQL unattended with a generated superuser password. Configures WAL archiving to `WalArchivePath`. Creates the database and the least-privilege application role. Applies the schema. | A schema version probe returns the expected version. A first base backup is written to `BaseBackupPath`. The run log is checked and contains neither generated password. |
+| 4 Application | Installs the .NET Hosting Bundle and the required Windows features. Copies the payload. Writes the production application configuration. Creates the IIS application pool (AlwaysRunning, no idle timeout) and the HTTPS site (SNI binding, auto-start, preload enabled). | `https://<hostname>/health` returns a healthy response. |
+| 5 Smoke test | Signs in as the seed admin and proves the account arrives flagged must-change-password and that the gate refuses API access (HTTP 403). Exercises the password-change path with a generated password. Creates a channel and posts the first message. Proves a message containing an emoji is rejected (HTTP 400). Restores the seeded state: the password is changed back to the configuration value and the must-change flag is set again. | The message row is read back from PostgreSQL. The flag is confirmed set. A fresh sign-in with the configuration password is performed and confirmed to arrive flagged. |
 
-**Seed admin.** The shipped seed password is a known constant, so the account
-is created flagged *must change password*: it can sign in but can do nothing
-except rotate its password. Rotate it on first sign-in and treat the config
-copy's seed value as spent.
+### 5.4 The seed admin account
 
-**Lab mode.** `-Mode Deploy -LabMode` exists for CI and lab hosts with no AD
-CS and no off-VM backup target: it substitutes a self-signed certificate and
-local backup folders, and prints a loud banner that the deployment is not
-production-equivalent. Never use it for production.
+Deploy creates one administrator account, named by `SeedAdminUser`
+(`admin` by default), with the password from `SeedAdminPassword` in the
+configuration file. Because that password is written in a file, the
+account is created with the **must-change-password** flag set. A session
+for a flagged account is refused by every API and hub path (HTTP 403)
+except the password-change path.
+
+Deploy's smoke test (Stage 5) exercises this mechanism and then restores
+the seeded state exactly: configuration password in place, flag set. The
+real rotation is performed by the operator at first sign-in (§5.2,
+Step 5). After that rotation, the seed value in the configuration file
+is spent; protect the file until then, because until the first rotation
+it contains a working one-shot credential.
+
+### 5.5 Lab mode
+
+`-Mode Deploy -LabMode` exists for continuous integration and lab hosts
+that have no AD CS and no off-server backup target. Lab mode makes
+exactly these substitutions, and prints a banner in the run log stating
+that the deployment is not production-equivalent:
+
+- A self-signed certificate replaces AD CS enrollment.
+- `WalArchivePath` and `BaseBackupPath` are redirected to local folders
+  under `C:\Atrium-Lab`.
+- The CA reachability check is skipped, and the configuration gate
+  exempts the three substituted settings (§4.4).
+
+Do not use lab mode for a production deployment.
 
 ## 6. Administering the server: the admin console
 
-The console is part of the web client at `/admin`, visible only to
-administrators. Non-administrators get a 403; anonymous requests get a 401.
-Every console action is written to the audit log.
+The admin console is part of the web client, at `/admin`. It is visible
+only to administrators: a signed-in non-administrator receives HTTP 403,
+and an anonymous request receives HTTP 401. Every console action is
+written to the audit log.
 
-| Tab | What it is for |
+### 6.1 Console tabs
+
+| Tab | Purpose |
 |---|---|
-| Audit | Searchable viewer over the append-only audit log (sign-ins, setting changes, policy changes, downloads, admin actions). No interface anywhere can edit or delete an audit row. |
+| Audit | Searchable viewer over the append-only audit log: sign-ins, setting changes, policy changes, downloads, and administrator actions. No interface in the product can edit or delete an audit record. |
 | Jobs | History of scheduled job runs (AD sync, samplers) with per-run results and missed-run detection. |
-| Users & Access | User list with per-user session inspection and revoke-all (type-the-name confirmation); who granted whom access, computed from live data; the **Message editing & deletion** sub-tab (below). |
-| Settings | The console-editable settings (below). |
-| History | Every settings snapshot as a data grid, with a changes-over-time timeline and one-click rollback to any snapshot. |
+| Users & Access | The user list, with per-user session inspection and revoke-all (which requires typing the user's name to confirm), access grants computed from live data, and the Message editing & deletion sub-tab (§6.3). |
+| Settings | The console-editable settings (§6.2). |
+| History | Every settings snapshot in a data grid, with a changes-over-time timeline (year, month, and day views) and rollback to any snapshot in one action. |
 | Resources | CPU (in core equivalents), memory, disk, and process history from the 60-second sampler, with health verdicts and recommendations. |
-| Health | Six status cards (database, search index, attachments, AD sync & jobs, resource sampler, server). The header reads **OK** or **Action needed**. |
-| Alerts | The alerting configuration panel plus the alert log (every firing, recovery, and email attempt). |
+| Health | Six status cards: database, search index, attachments, AD sync and jobs, resource sampler, and server. The header reads **OK** (green) or **Action needed** (orange); the tooltip lists every check. |
+| Alerts | The alerting configuration panel (§6.4) and the alert log: every firing, every recovery, and every email attempt. |
 
-**The save model is grouped, everywhere.** Editing settings marks them
-unsaved under a banner ("Settings were changed without saving"). *Save
-changes* validates every pending value first (one invalid value rejects the
-whole save and applies nothing), then applies atomically, writes one audit row
-per key, and appends exactly **one** snapshot to History: one save is one
-restore point. Leaving a tab discards unsaved edits. Alerting configuration
-uses the same model.
+### 6.2 Settings and the save model
 
-**Console-editable settings** (ranges enforced server-side):
+All console configuration uses one **grouped save model**. Editing a
+value marks it unsaved, and a banner states "Settings were changed
+without saving" for as long as unsaved edits exist. **Save changes**
+validates every pending value first: if any value is invalid, the whole
+save is rejected and nothing is applied. A valid save applies atomically,
+writes one audit record per changed setting, and appends exactly one
+snapshot to History. One save is one restore point. Navigating away from
+a tab discards its unsaved edits. Alerting configuration (§6.4) uses the
+same model.
+
+The console-editable settings, with the ranges the server enforces:
 
 | Setting | Default | Range |
 |---|---|---|
-| Message maximum length | 10,000 | 500–50,000 |
+| Message maximum length | 10,000 characters | 500 to 50,000 |
 | Message edit policy | any time | never / within limit / any time |
-| Message edit time limit (minutes) | 15 | 1–10,080 |
+| Message edit time limit | 15 minutes | 1 to 10,080 |
 | Message delete policy | own only | never / own only / any |
-| Upload maximum file size (MB) | 25 | 1–1,024 |
-| Notification retention (days) | 30 | 1–365 |
-| Session idle timeout (minutes) | 60 | 5–1,440 |
-| Presence away-after (minutes) | 5 | 1–60 |
-| Message rate limit (per minute) | 120 | 0 (off)–10,000 |
-| AD sync interval (hours) | 24 | 1–168 |
+| Upload maximum file size | 25 MB | 1 to 1,024 |
+| Notification retention | 30 days | 1 to 365 |
+| Session idle timeout | 60 minutes | 5 to 1,440 |
+| Presence away-after | 5 minutes | 1 to 60 |
+| Message rate limit | 120 per minute | 0 (off) to 10,000 |
+| AD sync interval | 24 hours | 1 to 168 |
 
-Structural values (connection strings, file paths, service accounts,
-certificates, the seed password, SMTP credentials) are install-time only and
-are shown as **not shown**, never as partial values.
+Structural values are install-time only and cannot be changed in the
+console: connection strings, file paths, service accounts, certificates,
+the seed password, and SMTP credentials. Where the console displays them,
+it shows **not shown**. It never displays a partial value.
 
-**Message editing & deletion policy** resolves in this order, most specific
-first: **per-user override → per-channel override → global default** (the
-Settings values above). Overrides live on the Users & Access tab, not in
-Settings. Editing is always author-only. There is no message-history feature:
-edited and deleted messages are gone from every user's view (the audit log
-still records that an edit or deletion happened).
+### 6.3 Message editing and deletion policy
 
-**Alerting** fires on **transitions only** (a check going bad, and one
-recovery notice when it clears), with a configurable cooldown (default 4
-hours) against repeats. Alerts go to three routes: an action-center
-notification, a message from the built-in *Atrium System* account, and email
-via the install-time SMTP relay. An email failure is logged and never blocks
-the other routes.
+The effective policy for a message is resolved in this order, most
+specific first:
 
-**Diagnostics.** The console produces a diagnostics bundle (a zip of server,
-job, resource, and configuration summaries) for support and incident review.
+1. Per-user override
+2. Per-channel override
+3. Global default (the Settings values in §6.2)
+
+Overrides are set on the Users & Access tab, not in Settings. Editing is
+author-only under every policy. There is no message-history feature: an
+edited or deleted message is removed from every user's view, including
+search results. The previous content is retained in the database for
+administrators, deletions write an audit record, and neither is exposed
+to users.
+
+### 6.4 Alerting
+
+Alerting fires on **transitions only**: one notification when a check
+enters a bad state, and exactly one recovery notification when it clears.
+A configurable cooldown (default 4 hours, range 1 to 720) limits repeat
+notifications for a check that remains bad.
+
+Alerts are delivered by three routes:
+
+1. An action-center notification to administrators.
+2. A message in the alert channel from the built-in **Atrium System**
+   account, prefixed `[Warning]`, `[Critical]`, or `[Recovered]`. This
+   account cannot sign in.
+3. Email through the install-time SMTP relay (§4.3).
+
+A failed email is recorded as a failed entry in the alert log and never
+blocks the other two routes. Email delivery to a real Exchange server is
+not yet verified (§12).
+
+### 6.5 Diagnostics bundle
+
+The console produces a diagnostics bundle: a zip file containing exactly
+four summaries (server, jobs, resources, and configuration) for support
+and incident review. Passwords and other secrets are not included.
 
 ## 7. Group Policy
 
-Group Policy enters Atrium in three distinct places. Be precise about which
-exist today:
+Group Policy touches Atrium in three places. Their status differs; this
+section states each one exactly.
 
-**1. Deploying the desktop shell (works today).** The shell ships as a
-versioned MSI (`Atrium.msi` in the bundle). Assign it with standard Group
-Policy Software Installation (Computer Configuration → Software Settings) or
-any MSI deployment tool. Because the bundle version is stamped into the MSI's
-product version, a new build is a clean GPO upgrade: publish the new MSI,
-raise its version, and mark it as upgrading the previous package. The client
-also checks the server's minimum shell version at sign-in, so a workstation
-that missed an upgrade is told so instead of failing silently.
+**1. Deploying the desktop shell: available now.**
+The shell is distributed as a versioned MSI, `Atrium.msi`, in the bundle.
+Assign it with Group Policy Software Installation (Computer
+Configuration, Software Settings) or any MSI deployment tool. The bundle
+stamp is encoded in the MSI product version, so a new build is a clean
+upgrade: publish the new MSI, and mark it as upgrading the previous
+package. Independently, the client checks the server's minimum shell
+version at sign-in; a workstation that missed an upgrade is told so at
+sign-in instead of failing silently.
 
-**2. Kerberos sign-in policy (works today, standard Windows policy).** For AD
-auto sign-in (Negotiate) to work from browsers and the shell, workstations
-need the Atrium host treated as a trusted intranet target:
+**2. Kerberos sign-in policy: available now, standard Windows policy.**
+For Active Directory sign-in (Negotiate) to work from browsers and the
+shell, workstations must treat the Atrium host as a trusted intranet
+target:
 
-- The server's SPN (`HTTP/<hostname>`) registered to the app pool's identity
-  (the gMSA; see §8)
-- The Atrium URL in the **Local Intranet zone** (Site to Zone Assignment List)
-  so the browser will answer a Negotiate challenge
-- No special delegation is required for sign-in itself; constrained delegation
-  is not used
+- The service principal name `HTTP/<hostname>` is registered to the
+  application pool identity (the gMSA, §8).
+- The Atrium URL is in the **Local Intranet** zone (Site to Zone
+  Assignment List), so the browser answers a Negotiate challenge.
+- No delegation configuration is required for sign-in. Constrained
+  delegation is not used.
 
-**3. ADMX/ADML policy templates (planned; issue #15, not yet shipped).** A
-template set is designed to bring Atrium's own settings under central policy:
-server-side values mirrored from the installer configuration and console
-settings, and client-side shell settings (server address, sign-in behavior,
-view defaults). The intended precedence is **policy wins**: a policy-managed
-setting will show as locked in the console wherever it appears. Until the
-templates ship, server configuration is the config file (§4) and the
-console (§6): there is no registry-based configuration today, and this guide
-will be updated when that changes.
+**3. ADMX/ADML policy templates: planned, not shipped (issue #15).**
+A template set is designed to bring Atrium's own settings under central
+policy: server values mirrored from the installer configuration and the
+console settings, and shell settings (server address, sign-in behavior,
+view defaults). The intended precedence is **policy wins**: a
+policy-managed setting will appear locked in the console wherever it is
+shown. Until the templates ship, server configuration is the
+configuration file (§4.3) and the console (§6). There is no
+registry-based configuration in this build.
 
 ## 8. Active Directory integration
 
-AD is an attachment, not a requirement: with AD disabled, the server is
-exactly the local-accounts build, and local sign-in remains available as
-break-glass even with AD enabled.
+Active Directory is an attachment, not a requirement. With AD disabled,
+the server is the local-accounts build, unchanged. With AD enabled, local
+sign-in remains available as a break-glass path.
 
-**Enabling it** is install-time configuration: set `AdEnabled`, the directory
-server, base DNs, the sync bind account, and the group-to-channel map in the
-`Atrium-Config.psd1`, then run Deploy. Two server-side pieces matter:
+**Enabling AD** is install-time configuration: set `AdEnabled` to
+`$true` and complete the directory settings (`AdServer`, `AdBaseDn`,
+`AdUserBaseDn`, `AdBindDn`, `AdBindPassword`, `AdGroupChannelMap`) in
+`Atrium-Config.psd1`, then run Deploy.
 
-- **App pool identity / SPN.** With AD on, the app pool should run as a group
-  Managed Service Account (gMSA) holding the `HTTP/<hostname>` SPN, so
-  HTTP.sys can answer Negotiate for that identity. Register the SPN once:
-  `setspn -S HTTP/<hostname> <DOMAIN\gmsa$>`. There is no keytab on
-  Windows/IIS.
-- **Sync.** On the configured interval, the server reads the directory over
-  LDAPS, provisions and disables user accounts to match, and applies
-  group-to-channel membership from the configured map. Only sync-provisioned
-  AD accounts can sign in through Negotiate; everyone else gets a 403 and can
-  still use local sign-in if they have a local account.
+**Application pool identity and SPN.** With AD enabled, the application
+pool runs as a group Managed Service Account (gMSA) that holds the
+`HTTP/<hostname>` service principal name, so HTTP.sys can answer
+Negotiate challenges for that identity. Register the SPN once:
 
-**Auto-login note.** Where shell auto-login from the Windows session is used,
-it never bypasses a required password change: an account flagged must-change
-(or reported expired by AD) stops at the change-required gate and receives no
-full session until the change is made (issue #24).
+```
+setspn -S HTTP/<hostname> <DOMAIN\gmsa$>
+```
+
+There is no keytab on Windows/IIS.
+
+**Synchronization.** On the configured interval (§6.2; default 24 hours),
+the server reads the directory in full over LDAPS before changing
+anything, then provisions and disables user accounts to match the
+directory, and applies group-to-channel membership from
+`AdGroupChannelMap`, in one transaction.
+
+**Sign-in rules.** Only sync-provisioned accounts (marked as AD accounts)
+can sign in through Negotiate. Any other account that attempts Negotiate
+receives HTTP 403. Local sign-in is unaffected.
+
+**Required password changes are never bypassed.** Where the shell signs
+in automatically from the Windows session (issue #24), a required
+password change still applies: if the account is flagged
+must-change-password, or AD reports the password as expired, the
+Negotiate flow stops at the change-required gate and no full session is
+granted until the change is made.
+
+**Verification limit.** AD integration is verified against a Samba AD
+domain controller test harness. End-to-end verification against a real
+Windows AD (IIS integrated authentication, gMSA operation, GPO SPNEGO
+policy, sync at scale) is lab-phase work (§12).
 
 ## 9. Backup, restore, and the rebuild model
 
-Read this section before you need it: it is the part of the design operators
-most often misunderstand.
+Read this section before it is needed. It is the part of the operating
+model most often misunderstood.
 
-**The installer is a rebuild tool, not an upgrade tool.** Every Deploy run
-destroys the existing deployment (IIS, the database and all its data, and
-the certificate) and builds from scratch. Retention promises apply *within*
-a deployment's lifetime, between rebuilds. Never run Deploy against a server
-whose data you have not first preserved.
+### 9.1 Deploy is a rebuild, not an upgrade
 
-**There is no in-place upgrade mode, by decision** (Nov 19, 2026). An
-in-place upgrade was considered in detail and rejected: schema migrations
-across several years of releases are a stair-step (every intermediate
-version's changes applied in order, any one of which can fail halfway), and
-PostgreSQL adds a hard boundary of its own, because a backup taken on one
-major version cannot always be restored directly onto a server many major
-versions newer. The upgrade path is therefore always the same: preserve the
-database and attachments, run a fresh Deploy of the new build, restore. The
-installer pins the PostgreSQL major version together with the application, so
-a years-old backup is restored onto its matching major version first rather
-than jumped across several in one step. Rebuild + restore is not the fallback
-option; it is the recommended one, because it proves the new install end to
-end every time and leaves the old system untouched until the new one is
-verified.
+**Warning:** every Deploy run destroys the existing deployment on the
+target server: the IIS site and application pool, PostgreSQL and all of
+its data, the install folder, and the certificate. It then builds a new
+deployment from the bundle. Retention statements in this guide apply
+within one deployment's lifetime, between rebuilds. Never run Deploy
+against a server whose data has not been preserved.
 
-**What protects data day to day**
+**There is no in-place upgrade mode.** This is a design decision
+(2026-11-19), not a missing feature. An in-place upgrade was considered
+and rejected for two reasons:
 
-- **WAL archiving:** PostgreSQL continuously archives its write-ahead log to
-  the configured off-VM target, with a 300-second archive timeout: the
-  recovery point objective is 15 minutes.
-- **Base backups:** Deploy's database stage takes a verified base backup.
-  Point-in-time recovery is base backup + WAL replay.
-- **Settings snapshots:** every console save is a restorable snapshot (§6),
-  but they live in the database, so they are protected by the database backup,
-  not instead of it.
+1. Schema changes across several years of releases form a stair-step:
+   every intermediate version's changes must be applied in order, and
+   any one of them can fail halfway.
+2. PostgreSQL imposes a hard boundary: a backup taken on one major
+   version cannot always be restored directly onto a server many major
+   versions newer.
 
-**Rapid recovery to a new server** (the intended disaster path) works in two
-parts, because the database and the install-time configuration live in
-different places:
+The upgrade procedure is therefore always the same: preserve the database
+and the attachment store, run a fresh Deploy of the new build, and
+restore (§9.3). The installer pins the PostgreSQL major version together
+with the application version, so a backup from an older release is
+restored onto its matching PostgreSQL major version first, not jumped
+across several major versions in one step. Rebuild and restore is the
+recommended path, not a fallback: it proves the new installation end to
+end on every upgrade and leaves the previous system untouched until the
+new one is verified.
 
-1. **The database** carries the accounts, channels, history, and every console
-   setting and snapshot. Restore the base backup onto the new host's
-   PostgreSQL and replay WAL to the desired point: the data tier comes back
-   as it was.
-2. **The install-time configuration** (hostname, paths, certificate, AD and
-   SMTP settings) lives in your saved production `Atrium-Config.psd1` (§4),
-   and a copy of the config file travels inside every bundle Build produces.
-   Stand the application tier up with that config file and point it at the
-   restored database.
+### 9.2 What protects data during a deployment's lifetime
 
-Automating this end to end (scheduled base backups with retention, an
-operator-facing restore path in the installer, and a portable
-settings/configuration export file) is planned work: issue #16. Today the
-pieces exist and the restore is an operator procedure; rehearse it before you
-depend on it. The recovery objectives the design is built to: RTO ≤ 4
-business hours, RPO ≤ 15 minutes.
+- **WAL archiving.** PostgreSQL archives its write-ahead log continuously
+  to `WalArchivePath` (an off-server target in production), with a
+  300-second archive timeout. The recovery point objective (RPO) is 15
+  minutes.
+- **Base backups.** Stage 3 of Deploy writes a verified base backup to
+  `BaseBackupPath`. Point-in-time recovery is a base backup plus WAL
+  replay.
+- **Settings snapshots.** Every console save is a restorable snapshot
+  (§6.2). Snapshots are stored in the database: they are protected by the
+  database backup, not a substitute for it.
+- **Attachments.** Attachments are stored outside the database, in the
+  content-addressed store. Back up that directory with the database. A
+  database restore without the attachment store leaves messages pointing
+  at files that do not exist.
 
-**Attachments** live outside the database in the content-addressed store.
-Back up that directory alongside the database; a database restore without the
-attachment store leaves messages pointing at files that are not there.
+### 9.3 Rapid recovery to a new server
+
+Recovery has two parts, because the data and the install-time
+configuration are stored in different places.
+
+1. **The database** holds the accounts, channels, history, and every
+   console setting and snapshot. Restore the base backup onto the new
+   server's PostgreSQL and replay WAL to the required point.
+2. **The install-time configuration** (hostname, paths, certificate, AD
+   and SMTP settings) is held in the saved production
+   `Atrium-Config.psd1`. A copy of the configuration file also travels
+   inside every bundle (§4.3). Stand the application tier up with that
+   configuration file and point it at the restored database.
+
+The recovery objectives the design is built to: recovery time objective
+(RTO) of 4 business hours or less, and RPO of 15 minutes (§9.2).
+
+Automating this procedure end to end (scheduled base backups with
+retention, an operator-facing Restore mode in the installer, a portable
+configuration export, and scheduled restore verification) is planned
+work: issues #16 and #36. In this build, the components exist and the
+restore is an operator procedure. Rehearse it before depending on it.
 
 ## 10. Security model
 
-- **Sessions** are server-side rows; the cookie carries only an opaque
-  session id. Revoking a user's sessions (console) takes effect immediately,
-  including dropping their live connections.
+- **Sessions** are server-side records. The session cookie carries only
+  an opaque session identifier. Revoking a user's sessions in the console
+  takes effect immediately, including disconnecting their live
+  connections.
 - **Passwords** are stored as PBKDF2 hashes. The seed admin is forced to
-  rotate on first use (§5).
-- **The scan gate is not optional.** Uploaded pictures are validated by
-  content (magic bytes and a full decode: the file extension is never
-  trusted), then scanned (Microsoft Defender on Windows). States are explicit:
-  stored → scanning → cleared or quarantined. A file that cannot be scanned
-  stays visibly stuck in *scanning*: there is no configuration that disables
-  the gate or lets an unscanned file through. Which scanner runs is the
-  install-time `AttachmentScanner` setting; §5 states the Defender
-  prerequisite and the `validation` alternative for organizations that do
-  not allow Defender.
-- **Database least privilege.** The application connects as a dedicated role
-  with only the rights it needs. Operations that need more (the installer's
-  base backup) run as the PostgreSQL superuser inside the installer only.
-- **Audit is append-only.** No code path in the product writes to, updates, or
-  deletes audit rows.
-- **Secrets in logs.** The installer masks credentials in every command line
-  it logs, and the database stage verifies its own run log contains neither
-  generated password.
-- **TLS everywhere.** The site is HTTPS-only with the enrolled certificate;
-  there is no HTTP listener to fall back to.
+  rotate on first use (§5.4).
+- **The scan gate is not optional.** Every uploaded picture passes two
+  checks before it becomes visible: content validation (magic-byte
+  format verification and a complete decode; the file extension is never
+  trusted), then the configured scanner (§5.1). A picture moves through
+  explicit states: `stored`, then `scanning`, then `cleared` or
+  `quarantined`. A picture whose scan cannot complete remains visibly in
+  `scanning`. No configuration disables the gate, and no unscanned
+  picture is ever served. Making the signature-scan leg itself optional,
+  and supporting third-party scanners, is planned work (issue #37); in
+  this build the choice is the scanner, not whether scanning happens.
+- **Database least privilege.** The application connects as a dedicated
+  role with only the rights it requires. Operations that need more (the
+  installer's base backup) run as the PostgreSQL superuser, inside the
+  installer only.
+- **The audit log is append-only.** No code path in the product updates
+  or deletes an audit record.
+- **Secrets in logs.** The installer masks credentials in every command
+  line it writes to the run log. Stage 3 verifies that its own run log
+  contains neither generated password.
+- **TLS.** The site is HTTPS only, using the enrolled certificate. There
+  is no HTTP listener.
 
 ## 11. Logs and troubleshooting
 
-- **Installer run logs** are written outside the install root (default
-  `C:\Atrium-Logs`) precisely so a rebuild never deletes the record of the
-  previous run. A failed stage names itself and the failed check; no later
-  stage runs. Fix the cause and re-run: every run rebuilds from scratch, so
-  re-running is always safe.
-- **Fail loud is the design rule.** Preconditions are checked, exit codes are
-  verified after every external command, and nothing retries silently or
-  guesses. If the installer stops, the log line is the diagnosis.
-- **Health first.** For a running server, the console Health tab and the
-  `/health` endpoint are the first stop; the Resources tab shows whether the
-  host is actually the problem.
-- **Common first-run failures:** empty SHA-256 slots (§4: record the hashes);
-  running Deploy under Windows PowerShell 5.1 (use `pwsh`); CA unreachable
-  from Stage 0 (RPC/DCOM 135 to the CA host); WAL/base-backup targets that are
-  local paths in production mode (they must be off-VM; local targets are what
-  `-LabMode` is for).
+### 11.1 Run logs
+
+Every Build and Deploy run writes a run log to the log root (default
+`C:\Atrium-Logs`), which is outside the install root by design: a rebuild
+never deletes the record of the previous run. A failed stage names itself
+and the failed check in the log, and no later stage runs. Correct the
+cause and run again: every run rebuilds from scratch, so re-running is
+always safe.
+
+For a running server, the first diagnostic stops are the console Health
+tab (§6.1), the `/health` endpoint, and the Resources tab, which shows
+whether the host itself is the problem.
+
+### 11.2 Failure behavior
+
+Preconditions are checked before they are relied on, the exit code of
+every external command is verified, and nothing retries silently or
+substitutes a guessed value. When the installer stops, the final run log
+line is the diagnosis.
+
+### 11.3 Common failures
+
+| Symptom | Cause and correction |
+|---|---|
+| Deploy stops in Stage 0: the attachment scanner check fails | `MpCmdRun.exe` could not be resolved while `AttachmentScanner` is `defender`. Install or enable Microsoft Defender, or set `AttachmentScanner` to `validation` (§5.1). |
+| Build stops: a redistributable SHA-256 does not match its pin | The file in `redist` is not the genuine pinned file. Delete it and run Build again (the genuine file is downloaded and verified), or place the genuine file (§4.2). |
+| Build stops: a redistributable could not be downloaded | The build machine has no route to the official locations. Follow the manual action printed by the run: download the named file on a connected machine, place it in `redist` with the exact name given, and run Build again (§4.2). |
+| Deploy refuses to start, or fails in Stage 0, under Windows PowerShell 5.1 | Deploy requires PowerShell 7. Run it with `pwsh` (§5.1). |
+| Stage 0 fails: the CA is unreachable | Production Deploy requires TCP port 135 to the CA host named by `CaServer` (§5.1). |
+| The configuration gate loops | A must-change setting still holds `__CHANGE_ME__`, or, with AD enabled, an AD setting is empty. The gate prints the names of the settings still missing on every pass (§4.4). |
+| Production Deploy rejects the backup targets | In production mode, `WalArchivePath` and `BaseBackupPath` must be off-server targets. Local folders are substituted only in lab mode (§5.5). |
 
 ## 12. Verification status and known limits
 
-Early alpha. What is verified as of build 261119_2008:
+Verified as of build 261119_2039:
 
-- Full Build mode, the shell MSI, live-server API batteries on Windows and
-  Linux, the UI battery, and a complete lab-mode Deploy (all six stages,
-  including the smoke test) run green in GitHub Actions on every push.
-- The feature set in §2 is built and covered by automated test batteries
-  against a local demo stack, including a Samba AD DC harness for the
-  Kerberos and sync paths.
+- Full Build mode, the shell MSI build and installation, live-server API
+  test batteries on Windows and Linux, the user interface test battery,
+  and a complete lab-mode Deploy (all six stages, including the smoke
+  test) run green in GitHub Actions on every push.
+- The feature set in §2 is implemented and covered by automated test
+  batteries against a local demonstration stack, including a Samba AD
+  domain controller harness for the Kerberos and synchronization paths.
 
-Not yet verified (lab-phase): Deploy against a production-like server with
-real AD CS enrollment, GPO deployment of the shell at scale, SMTP alert
-delivery to Exchange, and the capacity spikes (LiveKit call load, scrollback
-at full history volume). Planned features referenced above (GPO templates
-(#15), backup automation and configuration export (#16), high availability
-(#17, not adopted), and the PowerShell 7 bootstrap (#34)) are tracked in the
-issue tracker, which is the canonical record of open work.
+Not yet verified (lab-phase work):
 
----
+- Deploy against a production-like server with real AD CS enrollment
+- Group Policy deployment of the shell at scale
+- SMTP alert delivery to Exchange
+- The capacity spikes: LiveKit call load, and scrollback at full history
+  volume
 
-*This guide is maintained with the installer. If a procedure here disagrees
-with the script's behavior, the script is right and the guide is a bug:
-please file an issue.*
+Planned work referenced in this guide is tracked in the issue tracker,
+which is the canonical record of open work: Group Policy templates (#15),
+backup automation, Restore mode, and configuration export (#16),
+scheduled restore verification (#36), high availability (#17, proposed
+and not adopted), the PowerShell 7 bootstrap launcher (#34), automatic
+shell sign-in from the Windows session (#24), and configurable
+antivirus scanning (#37).
