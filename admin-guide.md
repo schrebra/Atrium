@@ -1,7 +1,7 @@
 # Atrium: Administrator Guide
 
 How to install, configure, and run an Atrium server. This guide describes the
-system as of build **261119_1415** (schema v15). Atrium is early alpha and not
+system as of build **261119_1940** (schema v15). Atrium is early alpha and not
 for production use; where a capability is planned rather than built, this guide
 says so and names the tracking issue.
 
@@ -145,6 +145,17 @@ GitHub Actions fills them in its own copy from the files it downloads.
 - PowerShell 7 (`pwsh`): Deploy asserts this in its first stage and fails
   loudly under Windows PowerShell 5.1. (A 5.1 bootstrap launcher that installs
   the bundled PowerShell 7 automatically is planned; see issue #34.)
+- Microsoft Defender, when the attachment scanner is `defender` (the shipped
+  default for `AttachmentScanner` in `Atrium-Config.psd1`): Stage 0 checks
+  that `MpCmdRun.exe` resolves (the in-box Windows Defender copy or a
+  Defender Platform copy under ProgramData) and fails with the fix named if
+  it does not, because the server will not start without it. If your
+  organization does not allow Microsoft Defender, set `AttachmentScanner` to
+  `validation` instead: the scan gate still runs on every upload (format
+  verification plus a full decode, with the pixel cap), but no malware
+  signature scan is performed. No setting turns the gate off; choosing
+  `validation` is a recorded operator decision to run without signature
+  scanning.
 - For production: an Active Directory Certificate Services CA reachable for
   certificate enrollment (template `WebServer` by default), and off-VM targets
   for WAL archives and base backups
@@ -382,7 +393,10 @@ attachment store leaves messages pointing at files that are not there.
   trusted), then scanned (Microsoft Defender on Windows). States are explicit:
   stored → scanning → cleared or quarantined. A file that cannot be scanned
   stays visibly stuck in *scanning*: there is no configuration that disables
-  the gate or lets an unscanned file through.
+  the gate or lets an unscanned file through. Which scanner runs is the
+  install-time `AttachmentScanner` setting; §5 states the Defender
+  prerequisite and the `validation` alternative for organizations that do
+  not allow Defender.
 - **Database least privilege.** The application connects as a dedicated role
   with only the rights it needs. Operations that need more (the installer's
   base backup) run as the PostgreSQL superuser inside the installer only.
@@ -415,7 +429,7 @@ attachment store leaves messages pointing at files that are not there.
 
 ## 12. Verification status and known limits
 
-Early alpha. What is verified as of build 261119_1415:
+Early alpha. What is verified as of build 261119_1940:
 
 - Full Build mode, the shell MSI, live-server API batteries on Windows and
   Linux, the UI battery, and a complete lab-mode Deploy (all six stages,

@@ -30,7 +30,8 @@ $assigns = $ast.FindAll({ param($n)
 foreach ($a in $assigns) { . ([scriptblock]::Create($a.Extent.Text)) }
 $wantedFuncs = @('Read-AtriumConfig', 'Get-MissingConfigValues', 'Test-ConfigUntouched',
                  'Open-ConfigEditor', 'Invoke-ConfigGate', 'Show-ConfigSummary',
-                 'Confirm-ConfigSummary', 'Compare-HardwareTier')
+                 'Confirm-ConfigSummary', 'Compare-HardwareTier', 'Resolve-DefenderPath',
+                 'Test-ScannerPrecondition')
 $defs = $ast.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
     $n.Name -in $wantedFuncs }, $true)
@@ -130,6 +131,33 @@ Check 'tier Medium 1 GB short on disk = 1 note' ($n.Count -eq 1 -and $n[0] -matc
 $threw = $null
 try { Compare-HardwareTier -Tier 'Huge' -Cores 8 -RamGB 32 -FreeDiskGB 500 | Out-Null } catch { $threw = $_.Exception.Message }
 Check 'tier unknown value throws' ($null -ne $threw) "got: $threw"
+
+# ---- Scanner precondition -----------------------------------------------------
+$pf1 = Join-Path $WorkRoot 'pf1'
+$wdDir = Join-Path $pf1 'Windows Defender'
+New-Item -ItemType Directory -Path $wdDir -Force | Out-Null
+New-Item -ItemType File -Path (Join-Path $wdDir 'MpCmdRun.exe') | Out-Null
+$pd1 = Join-Path $WorkRoot 'pd1'
+New-Item -ItemType Directory -Path $pd1 -Force | Out-Null
+$pfEmpty = Join-Path $WorkRoot 'pf-empty'
+New-Item -ItemType Directory -Path $pfEmpty -Force | Out-Null
+$pd2 = Join-Path $WorkRoot 'pd2'
+$platRoot = Join-Path (Join-Path (Join-Path $pd2 'Microsoft') 'Windows Defender') 'Platform'
+$v1 = Join-Path $platRoot '4.18.25070.5-0'
+$v2 = Join-Path $platRoot '4.18.25080.2-0'
+New-Item -ItemType Directory -Path $v1 -Force | Out-Null
+New-Item -ItemType File -Path (Join-Path $v1 'MpCmdRun.exe') | Out-Null
+New-Item -ItemType Directory -Path $v2 -Force | Out-Null
+New-Item -ItemType File -Path (Join-Path $v2 'MpCmdRun.exe') | Out-Null
+Check 'scanner validation needs no Defender' (@(Test-ScannerPrecondition -Scanner 'validation' -ProgramFiles $pfEmpty -ProgramData $pd1).Count -eq 0)
+Check 'scanner defender resolves the in-box copy' ((Resolve-DefenderPath -ProgramFiles $pf1 -ProgramData $pd1) -eq (Join-Path $wdDir 'MpCmdRun.exe'))
+Check 'scanner defender + in-box copy = no problems' (@(Test-ScannerPrecondition -Scanner 'defender' -ProgramFiles $pf1 -ProgramData $pd1).Count -eq 0)
+Check 'scanner defender resolves the newest Platform copy' ((Resolve-DefenderPath -ProgramFiles $pfEmpty -ProgramData $pd2) -eq (Join-Path $v2 'MpCmdRun.exe'))
+$p = @(Test-ScannerPrecondition -Scanner 'defender' -ProgramFiles $pfEmpty -ProgramData $pd1)
+Check 'scanner defender missing = one named problem' ($p.Count -eq 1 -and $p[0] -match 'MpCmdRun' -and $p[0] -match "'validation'") ($p -join '; ')
+$p = @(Test-ScannerPrecondition -Scanner 'bogus' -ProgramFiles $pfEmpty -ProgramData $pd1)
+Check 'scanner unknown value = one named problem' ($p.Count -eq 1 -and $p[0] -match 'bogus') ($p -join '; ')
+Check 'scanner value matching is case-insensitive' (@(Test-ScannerPrecondition -Scanner 'Defender' -ProgramFiles $pf1 -ProgramData $pd1).Count -eq 0)
 
 # ---- Gate: unattended --------------------------------------------------------
 $threw = $null

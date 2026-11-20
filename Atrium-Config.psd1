@@ -297,6 +297,13 @@
     #  production: validation decode, then a Microsoft Defender file
     #  scan) or 'validation' (decode-only; the Linux harness mode).
     #  The gate is core, not a plugin, and no setting disables it.
+    #  With 'defender', Deploy Stage 0 requires MpCmdRun.exe to be
+    #  present (the in-box Windows Defender copy or a Defender
+    #  Platform copy); the server will not start without it. If your
+    #  organization does not allow Microsoft Defender, use
+    #  'validation': the gate still verifies format and fully decodes
+    #  every image, but no malware signature scan runs. That tradeoff
+    #  is the operator's recorded decision, not a silent fallback.
     # ========================================================================
 
     AttachmentStorePath = 'C:\Atrium\Attachments'
