@@ -1,5 +1,7 @@
 # Screenshot gallery
 
+Live gallery site: https://schrebra.github.io/Atrium/
+
 Atrium: every screen at a glance. All screens captured from the current build (261120_1124; the UI sources are unchanged since build 261118_2133). Click any thumbnail for the full-size image. [Back to the README](../README.md)
 
 ## Client
