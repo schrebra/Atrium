@@ -43,9 +43,9 @@ The entire system ships as **one self-contained installer**, `261120_2139_Instal
 
 ## Authorship and AI co-authorship
 
-Atrium is co-authored by a human and AI systems, and this is stated plainly rather than left implicit. Brandon Schreiber directs the project: every design ruling, doctrine principle, and accept or reject decision is his. AI systems write code, tests, and documentation with him. The AI co-author of record to date is Muse (Meta AI), which has written the bulk of the implementation across the November 2026 builds; the design was also stress-tested by a four-role AI panel (systems administrator, project manager, developer, UI/UX expert) whose recommendations Brandon adopted or overruled on the record.
+Atrium is co-authored by a human and AI systems, and this is stated plainly rather than left implicit. The owner directs the project: every design ruling, doctrine principle, and accept or reject decision is the owner's. AI systems write code, tests, and documentation with him. The AI co-author of record to date is Muse (Meta AI), which has written the bulk of the implementation across the November 2026 builds; the design was also stress-tested by a four-role AI panel (systems administrator, project manager, developer, UI/UX expert) whose recommendations the owner adopted or overruled on the record.
 
-Commits an AI system co-authors carry a `Co-authored-by:` trailer naming that system, following the convention used by the ArtCraft open-source projects. AI contributors start with [AI-README.md](AI-README.md), the project's onboarding brief and rulebook for AI systems: doctrine, settled rulings, open questions, and publishing rules.
+Commits an AI system co-authors carry a `Co-authored-by:` trailer naming that system, following the convention used by the ArtCraft open-source projects. AI contributors start with [AI-PROMPT.md](AI-PROMPT.md), the project's onboarding brief and rulebook for AI systems: doctrine, settled rulings, open questions, and publishing rules.
 
 ## Screenshots
 
