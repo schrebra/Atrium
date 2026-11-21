@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:," />
+<title>Doctrine, layered</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0a0d12;
+    --bg2:#0e1219;
+    --panel:#12161f;
+    --panel2:#161b26;
+    --line:#232a38;
+    --line2:#2e3748;
+    --text:#eef1f7;
+    --muted:#c2cddc;
+    --faint:#9aa8bd;
+    --accent:#6aa6ff;
+    --accent-soft:#2b4a7a;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(900px 600px at 30% 0%, #101725 0%, rgba(16,23,37,0) 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:"Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  button,[role="button"],select,summary,input:not([type="checkbox"],[type="radio"]){min-height:2.75rem}
+  .wrap{max-width:1280px;margin:0 auto;padding:28px 20px 56px}
+
+  header{max-width:820px;margin:6px 0 22px}
+  .kicker{
+    font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);font-weight:700;margin:0 0 10px;
+  }
+  h1{
+    font-family:Georgia,"Times New Roman",serif;
+    font-weight:600;font-size:clamp(38px,6vw,56px);line-height:1.05;margin:0 0 12px;letter-spacing:.01em;
+  }
+  .subtitle{color:var(--text);font-size:19px;line-height:1.5;margin:0;max-width:58ch}
+  .subtitle strong{color:#fff}
+  .howto{
+    color:var(--muted);font-size:15.5px;line-height:1.6;margin:16px 0 0;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  }
+  .howto strong{color:#fff;font-weight:700}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+  .step{background:#0d1420;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .step b{display:block;color:#fff;font-size:15px;margin-bottom:2px}
+  .step span{color:var(--muted);font-size:13.5px;line-height:1.45;display:block}
+  .step .n{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:13px;font-weight:800;margin-bottom:6px}
+
+  .layout{
+    display:grid;grid-template-columns:minmax(0,1.6fr) minmax(320px,1fr);
+    gap:22px;align-items:start;
+  }
+  @media (max-width:920px){ .layout{grid-template-columns:1fr} }
+
+  .stage{
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:14px 10px 8px;
+    box-shadow:0 18px 44px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .stage svg{width:100%;height:auto;display:block}
+  .stage-cap{
+    display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+    padding:10px 8px 8px;color:var(--muted);font-size:14px;line-height:1.45;
+  }
+  .stage-cap .in{color:#fff;font-weight:700}
+
+  /* SVG segments — larger, bolder labels with a dark outline so they read at phone size */
+  .seg{cursor:pointer;outline:none}
+  .seg path.body{stroke:#07090d;stroke-width:2.5;transition:filter .15s ease, opacity .15s ease}
+  .seg:hover path.body,.seg:focus-visible path.body{filter:brightness(1.22)}
+  .seg.is-active path.body{filter:brightness(1.32);stroke:#fff;stroke-width:3}
+  .seg text{
+    fill:#ffffff;font-size:17px;font-weight:700;text-anchor:middle;
+    pointer-events:none;letter-spacing:.01em;
+    paint-order:stroke;stroke:rgba(0,0,0,.45);stroke-width:4px;stroke-linejoin:round;
+  }
+  .seg text.small{font-size:15.5px;font-weight:700}
+  .seg text.tiny{font-size:14px}
+  .center-disc{cursor:pointer;outline:none}
+  .center-disc circle.core{stroke:#07090d;stroke-width:2.5;transition:filter .15s ease}
+  .center-disc:hover circle.core,.center-disc:focus-visible circle.core{filter:brightness(1.18)}
+  .center-disc.is-active circle.core{filter:brightness(1.24)}
+  .center-disc text{fill:#fff;text-anchor:middle;pointer-events:none}
+  .ring-label{
+    fill:#aebdd2;font-size:13px;font-weight:800;letter-spacing:.2em;text-transform:uppercase;text-anchor:middle;pointer-events:none;
+  }
+  @media (prefers-reduced-motion: reduce){
+    .seg path.body,.center-disc circle.core{transition:none}
+  }
+
+  /* Right column */
+  .side{display:flex;flex-direction:column;gap:16px;min-width:0}
+
+  .detail{
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--line2);
+    border-radius:var(--radius);
+    padding:22px 22px 20px;
+    box-shadow:0 14px 34px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.04);
+    min-height:210px;
+  }
+  .detail .layer{
+    display:inline-flex;align-items:center;gap:8px;
+    font-size:13px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);
+    margin:0 0 8px;
+  }
+  .detail .layer::before{content:"";width:26px;height:4px;border-radius:2px;background:var(--accent);display:inline-block}
+  .detail h2{font-size:28px;line-height:1.15;margin:0 0 10px;font-weight:700;letter-spacing:.005em}
+  .detail p{color:#dde4ef;font-size:17px;line-height:1.65;margin:0}
+  .detail p + p{margin-top:10px}
+  .detail .verdict{
+    margin-top:14px;padding:12px 14px;border-radius:10px;
+    background:#0d1420;border:1px solid var(--accent-soft);
+    color:#dbeafe;font-size:16px;line-height:1.55;
+  }
+  .detail .verdict strong{color:#fff}
+
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 16px 12px;
+  }
+  .card h3{
+    font-size:13px;letter-spacing:.13em;text-transform:uppercase;color:#fff;
+    margin:2px 0 6px;font-weight:800;
+  }
+  .card .card-sub{color:var(--muted);font-size:14.5px;line-height:1.5;margin:0 0 12px}
+  .legend-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .legend-item{
+    width:100%;display:flex;align-items:center;gap:12px;text-align:left;
+    background:transparent;border:1px solid transparent;border-radius:12px;
+    padding:12px 12px;cursor:pointer;color:var(--text);font:inherit;min-height:56px;
+  }
+  .legend-item:hover{background:var(--panel2);border-color:var(--line)}
+  .legend-item.is-active{background:var(--panel2);border-color:var(--accent-soft)}
+  .legend-item .num{
+    flex:0 0 auto;width:38px;height:38px;border-radius:50%;
+    display:grid;place-items:center;font-size:15px;font-weight:800;color:#fff;
+    border:2px solid rgba(255,255,255,.28);
+    box-shadow:inset 0 2px 5px rgba(255,255,255,.25), inset 0 -3px 6px rgba(0,0,0,.45), 0 2px 5px rgba(0,0,0,.4);
+  }
+  .legend-item .lt{font-weight:700;font-size:16.5px;line-height:1.25;display:block}
+  .legend-item .ld{color:var(--muted);font-size:14px;line-height:1.45;display:block;margin-top:2px}
+  .legend-item .chev{margin-left:auto;color:var(--muted);font-size:13px;white-space:nowrap;text-align:right}
+
+  .index-group{margin:0 0 16px}
+  .index-group h4{
+    font-size:15px;margin:0 0 8px;color:#fff;font-weight:700;letter-spacing:.02em;
+    display:flex;align-items:center;gap:9px;
+  }
+  .index-group h4 .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;box-shadow:inset 0 1px 2px rgba(255,255,255,.4), inset 0 -2px 3px rgba(0,0,0,.4)}
+  .index-list{list-style:none;margin:0;padding:0}
+  .index-list li{margin:0}
+  .index-btn{
+    width:100%;text-align:left;background:transparent;border:0;border-radius:10px;
+    color:#e2e8f2;font:inherit;font-size:16px;line-height:1.4;padding:11px 10px;cursor:pointer;min-height:48px;
+    display:flex;gap:10px;align-items:baseline;
+  }
+  .index-btn:hover{background:var(--panel2);color:#fff}
+  .index-btn.is-active{background:#16202f;color:#fff;box-shadow:inset 3px 0 0 var(--accent)}
+  .index-btn .n{color:var(--muted);font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;flex:0 0 auto}
+
+  footer{margin-top:30px;color:var(--muted);font-size:14.5px;line-height:1.65;max-width:72ch}
+  footer p{margin:0}
+  footer strong{color:#fff}
+
+  /* ---- Small displays: diagram goes full-bleed and everything steps up ---- */
+  @media (max-width:920px){
+    .wrap{padding:20px 14px 48px}
+    .side{gap:14px}
+    /* On a phone the detail is the payoff for a tap — keep it directly under the diagram */
+    .detail{order:-1}
+  }
+  @media (max-width:640px){
+    .wrap{padding:16px 8px 44px}
+    header{margin-bottom:16px;padding:0 6px}
+    h1{font-size:42px}
+    .subtitle{font-size:18px}
+    .howto{font-size:15px;padding:13px 14px}
+    .steps{grid-template-columns:1fr;gap:8px}
+    .step{display:flex;gap:10px;align-items:flex-start}
+    .step .n{flex:0 0 auto;margin:1px 0 0}
+    .step b{margin-bottom:1px}
+    .layout{gap:14px}
+    /* Full-bleed stage: the circles use nearly the whole screen width */
+    .stage{margin:0 -2px;padding:6px 2px 4px;border-radius:14px}
+    .stage-cap{font-size:13.5px;padding:8px 8px 8px;flex-direction:column;gap:4px}
+    .detail{padding:18px 16px}
+    .detail h2{font-size:26px}
+    .detail p{font-size:16.5px}
+    .card{padding:16px 12px 10px}
+    .legend-item{padding:11px 10px}
+    .legend-item .chev{display:none}
+    footer{padding:0 6px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="kicker">Atrium &middot; Core philosophy</p>
+    <h1>Doctrine, layered</h1>
+    <p class="subtitle">Start in the <strong>center</strong>: that is the most important rule. Each ring around it matters a little less. The outside ring is everyday practice.</p>
+    <div class="howto">
+      <strong>How to read this in 10 seconds:</strong>
+      <div class="steps">
+        <div class="step"><span class="n">1</span><div><b>Center first</b><span>Control first is the rule everything else serves.</span></div></div>
+        <div class="step"><span class="n">2</span><div><b>Move outward</b><span>Method → Build → Product → Practice, in that order of importance.</span></div></div>
+        <div class="step"><span class="n">3</span><div><b>Tap any arch</b><span>Tap an arch, or a name in the lists below, to read what it means.</span></div></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <section class="stage" aria-label="Concentric circles diagram of the doctrine">
+      <svg id="diagram" viewBox="0 0 840 840" role="group" aria-label="Five concentric layers: Core, Method, Build doctrine, Product doctrine, Practice"></svg>
+      <div class="stage-cap">
+        <span><span class="in">● Center</span> = most important</span>
+        <span><span class="in">Outer ring</span> = daily practice, serving everything inside it</span>
+        <span><span class="in">Tap an arch</span> to read it below ↓</span>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="detail" id="detail" aria-live="polite" aria-label="Selected principle">
+        <p class="layer" id="d-layer">Core</p>
+        <h2 id="d-title">Control first</h2>
+        <div id="d-body"></div>
+      </section>
+
+      <section class="card" aria-label="The five layers in order">
+        <h3>The five layers, in order</h3>
+        <p class="card-sub">Most important first. Tap a layer to jump to its first principle.</p>
+        <div class="legend-list" id="legend"></div>
+      </section>
+
+      <section class="card" aria-label="Every segment by layer">
+        <h3>Every principle, by layer</h3>
+        <p class="card-sub">The same 23 names that are on the arches, in list form so they are easy to tap on a small screen.</p>
+        <div id="index"></div>
+      </section>
+    </aside>
+
+  </div>
+
+  <footer>
+    <p><strong>The rule in the center:</strong> if the operator cannot explain it and fix it, the design is wrong, however well the feature works.</p>
+    <p style="margin-top:8px">Source: the Atrium doctrine. Its thirteen principles are condensed faithfully and grouped by layer, drawn as twenty-three segments: the PROVE principle appears as its five stages, honest verification status stands as a segment of its own, and the outer ring collects the working habits the doctrine states across its principles.</p>
+  </footer>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------- Data: five layers, center outward ---------- */
+  var LAYERS = [
+    {
+      id:"core", name:"Core", short:"The core",
+      desc:"The one rule everything else serves",
+      color:"#2f6fd0", color2:"#1d4e9e",
+      items:[
+        { id:"control", title:"Control first",
+          body:"The operator must be able to explain how the system works and fix it when it breaks. Prefer the design that is understandable over the design that is clever.",
+          verdict:"\u201CProbably worked\u201D equals failed." }
+      ]
+    },
+    {
+      id:"method", name:"Method", short:"Ring 1 \u00B7 The method",
+      desc:"The PROVE loop, run on every consequential action",
+      color:"#3a5f8d", color2:"#2a476c",
+      items:[
+        { id:"prepare", title:"Prepare",
+          body:"Establish state from evidence, and label every claim observed, derived, or inferred. A claim with no evidence behind it is a hypothesis and is treated as one." },
+        { id:"risk", title:"Risk",
+          body:"Write the prediction, the failure list, and the rollback before acting. An action with no rollback must be clean-slate rebuildable, or explicitly accepted as irreversible first." },
+        { id:"operate", title:"Operate",
+          body:"Test preconditions in the real environment, take the smallest real attempt first, then execute. Nothing fails silently: a step that cannot proceed stops and names the cause." },
+        { id:"verify", title:"Verify",
+          body:"Measure the result against the prediction from the Risk stage, not against the absence of errors. Verify adversarially where the stakes warrant it, because the builder\u2019s confirmation is biased evidence." },
+        { id:"evaluate", title:"Evaluate",
+          body:"Keep, roll back, or iterate from the measurements, not from attachment to the work done. Record what changed and why, and correct the model when the prediction was wrong." },
+        { id:"honest", title:"Honest verification",
+          body:"Report every capability as exactly what it is: battery-verified, verified by construction, or lab-phase and not yet verified. A stand-in that proves the logic is labeled as a stand-in, never as the real thing." }
+      ]
+    },
+    {
+      id:"build", name:"Build doctrine", short:"Ring 2 \u00B7 Build doctrine",
+      desc:"How the system is built and rebuilt",
+      color:"#46586e", color2:"#333f52",
+      items:[
+        { id:"pinned", title:"Deterministic and pinned",
+          body:"Exact versions, SHA-256 verified, locked restores. A toolchain or package that is merely newer fails the build, and a download is accepted only when its hash matches the pin." },
+        { id:"cleanslate", title:"Clean-slate rebuilds",
+          body:"The installer destroys and rebuilds from scratch on every run: site, database, and certificate. There is no in-place upgrade, ever, so there is no surviving state to drift." },
+        { id:"explicit", title:"Explicit over convenient",
+          body:"Configuration is stated, not inferred, and defaults are chosen deliberately and written down. Secrets and display-only values are shown as \u201Cnot shown\u201D, never as partial values." },
+        { id:"free", title:"Free components only",
+          body:"No paid dependencies, no licensing tiers, no feature gates. If a capability matters, it is built in rather than bought as an add-on." },
+        { id:"compute", title:"Compute, do not store",
+          body:"Anything that can go stale is derived at read time instead of stored. Presence is the worked example: computed from live state, never written down, and a connection silent for 150 seconds reads Offline." }
+      ]
+    },
+    {
+      id:"product", name:"Product doctrine", short:"Ring 3 \u00B7 Product doctrine",
+      desc:"What the product is, and what it refuses to be",
+      color:"#55606e", color2:"#3f4854",
+      items:[
+        { id:"plaintext", title:"Plain text, on purpose",
+          body:"Messages are plain text and hyperlinks are the only formatting. Emoji are rejected with a visible error, and there is no Markdown, no mentions feature, and no hashtags." },
+        { id:"grouped", title:"Grouped saves, atomic application",
+          body:"Edits accumulate, validate as a batch, and apply in one transaction. One invalid value rejects the whole save with nothing applied, and one save is one restore point." },
+        { id:"record", title:"The record is kept",
+          body:"Deletions are invisible to users, but nothing is ever truly deleted, only archived. Edit history accumulates and the audit log is append-only, with no write path that can alter it." },
+        { id:"mvp", title:"MVP first, then attach",
+          body:"Ship the smallest version that is genuinely the thing, then attach one verified capability at a time. Nothing is built speculatively, before a concrete need exists." },
+        { id:"design", title:"Design must earn its place",
+          body:"UI changes ship only when functionally beneficial, never for cosmetics alone. Substantial UI goes mockup, approval, build, then a design sweep before anything reaches users." }
+      ]
+    },
+    {
+      id:"practice", name:"Practice", short:"Ring 4 \u00B7 Practice",
+      desc:"How the work is carried out, day to day",
+      color:"#626a75", color2:"#484f59",
+      items:[
+        { id:"failloud", title:"Fail loud",
+          body:"A step that cannot proceed stops and names the cause. Silent failure is treated as the worst outcome, worse than the failure itself." },
+        { id:"adversarial", title:"Verify adversarially",
+          body:"Test that a protection can actually refuse, not just that it exists. Try to break the result instead of only confirming it." },
+        { id:"batteries", title:"Batteries, not adjectives",
+          body:"Results are reported as counts from automated test batteries, for example API 41/41, never as adjectives like \u201Cthoroughly tested\u201D." },
+        { id:"rulings", title:"Rulings recorded once",
+          body:"A settled decision is written down once and never re-litigated. An open question stays visibly open until it is actually decided." },
+        { id:"releases", title:"Every release states its changes",
+          body:"Each release description says what changed from the previous build, so anyone can see the difference without digging through the work." },
+        { id:"screenshots", title:"Screenshots in the same round",
+          body:"New UI gets labeled gallery screenshots in the same round of work that produced it, never later and never as an afterthought." }
+      ]
+    }
+  ];
+
+  /* ---------- Geometry ---------- */
+  var CX = 420, CY = 420;
+  /* ring bands: [innerRadius, outerRadius] per layer index 1..4 — thickened so arches and labels are bigger on small screens */
+  var BANDS = [ null, [100, 176], [183, 251], [258, 324], [331, 400] ];
+  var GAP_DEG = 2.0;
+
+  function polar(r, deg){
+    var a = (deg - 90) * Math.PI / 180;
+    return [CX + r * Math.cos(a), CY + r * Math.sin(a)];
+  }
+  function arcPath(rIn, rOut, start, end){
+    var p1 = polar(rOut, start), p2 = polar(rOut, end);
+    var p3 = polar(rIn, end),   p4 = polar(rIn, start);
+    var large = (end - start) > 180 ? 1 : 0;
+    return "M" + p1[0].toFixed(2) + "," + p1[1].toFixed(2) +
+           " A" + rOut + "," + rOut + " 0 " + large + " 1 " + p2[0].toFixed(2) + "," + p2[1].toFixed(2) +
+           " L" + p3[0].toFixed(2) + "," + p3[1].toFixed(2) +
+           " A" + rIn + "," + rIn + " 0 " + large + " 0 " + p4[0].toFixed(2) + "," + p4[1].toFixed(2) + " Z";
+  }
+  function arcStroke(r, start, end){
+    var p1 = polar(r, start), p2 = polar(r, end);
+    var large = (end - start) > 180 ? 1 : 0;
+    return "M" + p1[0].toFixed(2) + "," + p1[1].toFixed(2) +
+           " A" + r + "," + r + " 0 " + large + " 1 " + p2[0].toFixed(2) + "," + p2[1].toFixed(2);
+  }
+  function splitTitle(title){
+    /* split a label into up to two lines that fit an arch segment */
+    var words = title.split(" ");
+    if (title.length <= 13 || words.length === 1) return [title];
+    var best = null, bestDiff = 1e9;
+    for (var i = 1; i < words.length; i++){
+      var a = words.slice(0, i).join(" "), b = words.slice(i).join(" ");
+      var d = Math.abs(a.length - b.length);
+      if (d < bestDiff){ bestDiff = d; best = [a, b]; }
+    }
+    return best;
+  }
+
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs){
+    var n = document.createElementNS(SVGNS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+
+  var svg = document.getElementById("diagram");
+  var defs = el("defs", {});
+
+  /* one vertical light gradient per ring, so each course reads as a raised arch */
+  LAYERS.forEach(function(layer, li){
+    var g = el("linearGradient", { id:"grad" + li, x1:"0", y1:"0", x2:"0.35", y2:"1" });
+    var s1 = el("stop", { offset:"0%", "stop-color": layer.color });
+    var s2 = el("stop", { offset:"55%", "stop-color": layer.color });
+    var s3 = el("stop", { offset:"100%", "stop-color": layer.color2 });
+    s1.setAttribute("stop-opacity","1");
+    g.appendChild(s1); g.appendChild(s2); g.appendChild(s3);
+    defs.appendChild(g);
+  });
+  /* soft shadow under each raised course */
+  var filt = el("filter", { id:"courseShadow", x:"-20%", y:"-20%", width:"140%", height:"140%" });
+  var fe = el("feDropShadow", { dx:"0", dy:"3", stdDeviation:"3", "flood-color":"#000000", "flood-opacity":"0.45" });
+  filt.appendChild(fe); defs.appendChild(filt);
+  svg.appendChild(defs);
+
+  /* faint full circles behind the courses, so the terraces sit on a plinth */
+  [400, 324, 251, 176].forEach(function(r){
+    svg.appendChild(el("circle", { cx:CX, cy:CY, r:r, fill:"none", stroke:"#1a2130", "stroke-width":"10", "pointer-events":"none" }));
+  });
+
+  var segGroups = {};   /* itemId -> svg group */
+  var layerOf = {};     /* itemId -> layer index */
+
+  /* rings 1 to 4 */
+  for (var li = 1; li < LAYERS.length; li++){
+    (function(layer, li){
+      var band = BANDS[li], rIn = band[0], rOut = band[1], rMid = (rIn + rOut) / 2;
+      var n = layer.items.length, step = 360 / n;
+      /* start the first segment at the top, slightly offset so a joint never sits dead center top.
+         Ring 3 is turned half a step further, so no arch is centered on the side axis. */
+      var start0 = (li === 3) ? 0 : -step / 2;
+      layer.items.forEach(function(item, i){
+        layerOf[item.id] = li;
+        var start = start0 + i * step + GAP_DEG / 2;
+        var end   = start0 + (i + 1) * step - GAP_DEG / 2;
+        var mid   = (start + end) / 2;
+
+        var g = el("g", { "class":"seg", tabindex:"0", role:"button",
+          "aria-label": layer.name + ": " + item.title, "data-id": item.id });
+        var body = el("path", { "class":"body", d: arcPath(rIn, rOut, start, end),
+          fill:"url(#grad" + li + ")", filter:"url(#courseShadow)" });
+        g.appendChild(body);
+        /* highlight along the outer lip: the lit top edge of the arch */
+        g.appendChild(el("path", { d: arcStroke(rOut - 3.5, start + 1.2, end - 1.2),
+          fill:"none", stroke:"rgba(255,255,255,0.20)", "stroke-width":"2", "pointer-events":"none" }));
+        /* shade along the inner lip */
+        g.appendChild(el("path", { d: arcStroke(rIn + 3, start + 1.2, end - 1.2),
+          fill:"none", stroke:"rgba(0,0,0,0.28)", "stroke-width":"2.5", "pointer-events":"none" }));
+
+        /* label, kept upright: flipped on the lower half so nothing reads upside down */
+        var pos = polar(rMid, mid);
+        var rot = mid;
+        var flip = false;
+        if (rot > 90 && rot < 270){ rot = rot + 180; flip = true; }
+        var lines = splitTitle(item.title);
+        var t = el("text", { transform:"translate(" + pos[0].toFixed(1) + "," + pos[1].toFixed(1) + ") rotate(" + rot.toFixed(1) + ")" });
+        if (li >= 3 || lines.some(function(s){ return s.length > 12; })) t.setAttribute("class","small");
+        if (li === 4 && lines.some(function(s){ return s.length > 13; })) t.setAttribute("class","tiny");
+        lines.forEach(function(line, idx){
+          var ts = el("tspan", { x:"0", dy: idx === 0 ? (lines.length === 1 ? "0.35em" : "-0.12em") : "1.12em" });
+          ts.textContent = line;
+          t.appendChild(ts);
+        });
+        g.appendChild(t);
+
+        g.addEventListener("click", function(){ select(item.id, true); });
+        g.addEventListener("mouseenter", function(){ select(item.id, false); });
+        g.addEventListener("focus", function(){ select(item.id, false); });
+        g.addEventListener("keydown", function(ev){
+          if (ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); select(item.id, true); }
+        });
+        svg.appendChild(g);
+        segGroups[item.id] = g;
+      });
+
+      /* ring name, letter-spaced, sitting in the gap below each course at the top (clamped so the outer label never clips off the top edge) */
+      var lbl = el("text", { "class":"ring-label", x: CX, y: Math.max(17, CY - rOut - 13) });
+      lbl.textContent = layer.name;
+      svg.appendChild(lbl);
+    })(LAYERS[li], li);
+  }
+
+  /* center disc */
+  (function(){
+    var core = LAYERS[0], item = core.items[0];
+    layerOf[item.id] = 0;
+    var g = el("g", { "class":"center-disc", tabindex:"0", role:"button",
+      "aria-label":"Core: " + item.title, "data-id": item.id });
+    g.appendChild(el("circle", { cx:CX, cy:CY, r:94, fill:"#101623", stroke:"#232c3e", "stroke-width":"1" }));
+    var c = el("circle", { "class":"core", cx:CX, cy:CY, r:87, fill:"url(#grad0)", filter:"url(#courseShadow)" });
+    g.appendChild(c);
+    g.appendChild(el("circle", { cx:CX, cy:CY, r:87, fill:"none", stroke:"rgba(255,255,255,0.22)", "stroke-width":"1.5",
+      "stroke-dasharray":"0", "pointer-events":"none", transform:"translate(0,-1.5)" }));
+
+    var t1 = el("text", { x:CX, y:CY - 28, "font-size":"13", "font-weight":"800",
+      "letter-spacing":"0.22em", fill:"#d6e6ff" });
+    t1.textContent = "THE CORE";
+    g.appendChild(t1);
+    var t2 = el("text", { x:CX, y:CY + 7, "font-size":"29", "font-weight":"700",
+      "font-family":"Georgia, 'Times New Roman', serif" });
+    t2.textContent = "Control";
+    g.appendChild(t2);
+    var t3 = el("text", { x:CX, y:CY + 38, "font-size":"29", "font-weight":"700",
+      "font-family":"Georgia, 'Times New Roman', serif" });
+    t3.textContent = "first";
+    g.appendChild(t3);
+    var t4 = el("text", { x:CX, y:CY + 62, "font-size":"12", "font-weight":"700", fill:"#dbe8fb" });
+    t4.textContent = "MOST IMPORTANT";
+    g.appendChild(t4);
+
+    g.addEventListener("click", function(){ select(item.id, true); });
+    g.addEventListener("mouseenter", function(){ select(item.id, false); });
+    g.addEventListener("focus", function(){ select(item.id, false); });
+    g.addEventListener("keydown", function(ev){
+      if (ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); select(item.id, true); }
+    });
+    svg.appendChild(g);
+    segGroups[item.id] = g;
+  })();
+
+  /* ---------- Detail panel, legend, index ---------- */
+  var dLayer = document.getElementById("d-layer");
+  var dTitle = document.getElementById("d-title");
+  var dBody  = document.getElementById("d-body");
+  var currentId = null;
+
+  function findItem(id){
+    for (var i = 0; i < LAYERS.length; i++){
+      for (var j = 0; j < LAYERS[i].items.length; j++){
+        if (LAYERS[i].items[j].id === id) return { layer: LAYERS[i], item: LAYERS[i].items[j] };
+      }
+    }
+    return null;
+  }
+
+  function select(id, scroll){
+    var found = findItem(id);
+    if (!found) return;
+    currentId = id;
+    dLayer.textContent = found.layer.short;
+    dTitle.textContent = found.item.title;
+    dBody.innerHTML = "";
+    var p = document.createElement("p");
+    p.textContent = found.item.body;
+    dBody.appendChild(p);
+    if (found.item.verdict){
+      var v = document.createElement("div");
+      v.className = "verdict";
+      var s = document.createElement("strong");
+      s.textContent = "The verdict rule: ";
+      v.appendChild(s);
+      v.appendChild(document.createTextNode(found.item.verdict));
+      dBody.appendChild(v);
+    }
+    Object.keys(segGroups).forEach(function(k){
+      segGroups[k].classList.toggle("is-active", k === id);
+    });
+    document.querySelectorAll(".index-btn").forEach(function(b){
+      b.classList.toggle("is-active", b.getAttribute("data-id") === id);
+    });
+    document.querySelectorAll(".legend-item").forEach(function(b){
+      b.classList.toggle("is-active", Number(b.getAttribute("data-layer")) === layerOf[id]);
+    });
+    if (scroll && window.innerWidth <= 920){
+      document.getElementById("detail").scrollIntoView({ block:"nearest", behavior:"smooth" });
+    }
+  }
+
+  /* legend: the five layers in order */
+  var legend = document.getElementById("legend");
+  LAYERS.forEach(function(layer, li){
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "legend-item";
+    b.setAttribute("data-layer", li);
+    var num = document.createElement("span");
+    num.className = "num";
+    num.style.background = "linear-gradient(180deg," + layer.color + "," + layer.color2 + ")";
+    num.textContent = li === 0 ? "\u25CF" : String(li);
+    var txt = document.createElement("span");
+    var lt = document.createElement("span"); lt.className = "lt"; lt.textContent = layer.name;
+    var ld = document.createElement("span"); ld.className = "ld"; ld.textContent = layer.desc;
+    txt.appendChild(lt); txt.appendChild(document.createElement("br")); txt.appendChild(ld);
+    var ch = document.createElement("span"); ch.className = "chev"; ch.textContent = layer.items.length + (layer.items.length === 1 ? " segment" : " segments");
+    b.appendChild(num); b.appendChild(txt); b.appendChild(ch);
+    b.addEventListener("click", function(){ select(layer.items[0].id, true); });
+    legend.appendChild(b);
+  });
+
+  /* full index, grouped by layer */
+  var indexBox = document.getElementById("index");
+  LAYERS.forEach(function(layer, li){
+    var grp = document.createElement("div");
+    grp.className = "index-group";
+    var h = document.createElement("h4");
+    var dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = "linear-gradient(180deg," + layer.color + "," + layer.color2 + ")";
+    h.appendChild(dot);
+    h.appendChild(document.createTextNode(layer.name + (li > 0 ? " \u00B7 ring " + li : "")));
+    grp.appendChild(h);
+    var ul = document.createElement("ul");
+    ul.className = "index-list";
+    layer.items.forEach(function(item, i){
+      var liEl = document.createElement("li");
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "index-btn";
+      btn.setAttribute("data-id", item.id);
+      var n = document.createElement("span");
+      n.className = "n";
+      n.textContent = li === 0 ? "\u2605" : (li + "." + (i + 1));
+      btn.appendChild(n);
+      btn.appendChild(document.createTextNode(item.title));
+      btn.addEventListener("click", function(){ select(item.id, true); });
+      btn.addEventListener("mouseenter", function(){ select(item.id, false); });
+      liEl.appendChild(btn);
+      ul.appendChild(liEl);
+    });
+    grp.appendChild(ul);
+    indexBox.appendChild(grp);
+  });
+
+  select("control", false);
+})();
+</script>
+</body>
+</html>
