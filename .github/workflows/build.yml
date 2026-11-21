@@ -16,12 +16,15 @@ name: Build check and release
 #   runtime-linux    The same API battery on Ubuntu against a
 #                    PostgreSQL 17 service, plus the headless-Chrome
 #                    UI battery (tests/ui-battery.js).
-#   deploy-windows   Downloads the bundle the build job produced (it
-#                    does not build a second time), then the
-#                    installer's Deploy mode with -LabMode
-#                    (self-signed certificate, local archive folders)
-#                    on the Windows Server runner: IIS site,
-#                    PostgreSQL, and the built-in smoke test.
+#   (Deploy proof)   The installer's Deploy mode no longer runs in
+#                    this workflow. It is the nightly job in
+#                    deploy-nightly.yml (build + Deploy once a night
+#                    when the day brought changes, plus manual
+#                    dispatch): Deploy was the long pole of every
+#                    push run (10m 37s of the 12m 45s wall clock
+#                    measured Nov 20, 2026, almost all of it vendor
+#                    installer waits), and its verdict does not change
+#                    what a push needs to know before the next one.
 #
 # Push partitioning: this workflow's push trigger carries a paths
 # filter (the installer, Atrium-Config.psd1, .github/workflows/**),
@@ -84,6 +87,18 @@ jobs:
       file: ${{ steps.inst.outputs.file }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Exclude the workspace from Defender scanning (CI only)
+        shell: pwsh
+        run: |
+          # CI speed only: this runner is ephemeral, and everything
+          # Defender would scan here was either just checked out from
+          # this repository or produced by this job. Real-time
+          # scanning of the publish output and file churn costs
+          # minutes per job. The product installer is untouched: its
+          # Stage 0 Defender precondition is a product feature, and
+          # nothing here weakens a check that runs on a real server.
+          Add-MpPreference -ExclusionPath $PWD.Path
+          Write-Host "Defender exclusions added."
       - name: Run the CI gate
         shell: pwsh
         run: |
@@ -304,6 +319,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Exclude the workspace from Defender scanning (CI only)
+        shell: pwsh
+        run: |
+          # CI speed only: this runner is ephemeral, and everything
+          # Defender would scan here was either just checked out from
+          # this repository or produced by this job. Real-time
+          # scanning of the publish output and file churn costs
+          # minutes per job. The product installer is untouched: its
+          # Stage 0 Defender precondition is a product feature, and
+          # nothing here weakens a check that runs on a real server.
+          Add-MpPreference -ExclusionPath $PWD.Path
+          Add-MpPreference -ExclusionPath 'C:\Program Files\PostgreSQL'
+          Write-Host "Defender exclusions added."
       - name: Run the CI gate
         shell: pwsh
         run: |
@@ -345,33 +373,53 @@ jobs:
         run: |
           & ./${{ steps.inst.outputs.file }} -Mode Build -EmitOnly -BundlePath (Join-Path $PWD 'ci-bundle') -WorkRoot (Join-Path $PWD 'ci-work')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Cache the PostgreSQL installer
+      - name: Cache the PostgreSQL binaries ZIP
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: pg-installer.exe
-          key: atrium-postgresql-17.4-1-windows-x64
-      - name: Install PostgreSQL 17
+          path: pg-binaries.zip
+          key: atrium-postgresql-17.4-1-windows-x64-binaries
+      - name: Install PostgreSQL 17 (binaries ZIP + initdb)
         shell: pwsh
         run: |
-          # The runner image may already carry a PostgreSQL 17 install.
-          # The EDB installer then upgrades it in place and ignores the
-          # --servicename/--serverport parameters below, leaving
-          # nothing listening on 5433 (first hit: run 44552697443).
-          # Remove any existing install first so the parameters hold.
-          $existing = 'C:\Program Files\PostgreSQL\17\uninstall-postgresql.exe'
-          if (Test-Path $existing) {
-            Get-Service | Where-Object { $_.Name -like 'postgres*' } | Stop-Service -Force -ErrorAction SilentlyContinue
-            $u = Start-Process $existing -ArgumentList '--mode', 'unattended' -Wait -PassThru
-            Write-Host "Existing PostgreSQL uninstaller exit code: $($u.ExitCode)"
-            Remove-Item 'C:\Program Files\PostgreSQL\17' -Recurse -Force -ErrorAction SilentlyContinue
-          }
-          if (Test-Path '.\pg-installer.exe') { Write-Host 'PostgreSQL installer restored from cache; skipping the download.' }
-          else { Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'pg-installer.exe' }
-          $p = Start-Process '.\pg-installer.exe' -ArgumentList '--mode', 'unattended', '--unattendedmodeui', 'none', '--superpassword', 'CiSuper!2026', '--serverport', '5433', '--servicename', 'postgresql-ci' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "PostgreSQL installer failed with exit code $($p.ExitCode)." }
-          $pgBin = 'C:\Program Files\PostgreSQL\17\bin'
-          if (-not (Test-Path (Join-Path $pgBin 'psql.exe'))) { throw 'psql.exe not found after the PostgreSQL install.' }
-          Start-Service 'postgresql-ci' -ErrorAction SilentlyContinue
+          # The runtime smoke test needs a PostgreSQL 17 server on
+          # 5433 with a known superuser password; it does not need the
+          # EDB installer, which cost 2m 58s of this job's 4m 24s on
+          # Nov 20, 2026 (the download, the uninstall of the runner's
+          # own install, and the installer run itself). The official
+          # EDB binaries ZIP carries the same 17.4 binaries: verify it
+          # against the pin, extract it where the installer would have
+          # put it (the steps below keep their paths), initdb a
+          # cluster, and start it with pg_ctl. No Windows service is
+          # registered; nothing in this job used the old service name,
+          # only TCP and psql. The shipped bundle still carries the
+          # EDB installer: Deploy on a real server is unchanged.
+          $pgRoot = 'C:\Program Files\PostgreSQL\17'
+          $pgBin = Join-Path $pgRoot 'bin'
+          # Clear any PostgreSQL the runner image carries: its
+          # binaries occupy the same directory and its service may be
+          # running. There is no installer in this flow to upgrade it
+          # in place, so the directory simply goes.
+          Get-Service | Where-Object { $_.Name -like 'postgres*' } | Stop-Service -Force -ErrorAction SilentlyContinue
+          if (Test-Path $pgRoot) { Remove-Item $pgRoot -Recurse -Force }
+          if (Test-Path '.\pg-binaries.zip') { Write-Host 'PostgreSQL binaries ZIP restored from cache; skipping the download.' }
+          else { Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64-binaries.zip' -OutFile 'pg-binaries.zip' }
+          $hash = (Get-FileHash '.\pg-binaries.zip' -Algorithm SHA256).Hash
+          if ($hash -ne '80BB49E80DF0100DD52E7B3C647896F8D8CFDE760B6473E5180819C8DF4B23C4') { throw "PostgreSQL binaries ZIP SHA-256 mismatch: $hash" }
+          New-Item -ItemType Directory -Path '.\pg-extract' -Force | Out-Null
+          tar -xf '.\pg-binaries.zip' -C '.\pg-extract'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path $pgRoot -Force | Out-Null
+          Copy-Item '.\pg-extract\pgsql\*' -Destination $pgRoot -Recurse -Force
+          if (-not (Test-Path (Join-Path $pgBin 'psql.exe'))) { throw 'psql.exe not found after extracting the PostgreSQL binaries.' }
+          $data = Join-Path $pgRoot 'data'
+          $pwFile = Join-Path $PWD 'pg-superuser-pw.txt'
+          Set-Content -Path $pwFile -Value 'CiSuper!2026' -NoNewline
+          & (Join-Path $pgBin 'initdb.exe') -D $data -U postgres --pwfile=$pwFile -A scram-sha-256
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item $pwFile
+          Add-Content (Join-Path $data 'postgresql.conf') 'port = 5433'
+          & (Join-Path $pgBin 'pg_ctl.exe') -D $data -l (Join-Path $PWD 'pg-server.log') start
+          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $PWD 'pg-server.log') -Tail 40; exit $LASTEXITCODE }
           $env:PGPASSWORD = 'CiSuper!2026'
           $ready = $false
           for ($i = 0; $i -lt 30 -and -not $ready; $i++) {
@@ -379,15 +427,7 @@ jobs:
             $ready = ($LASTEXITCODE -eq 0)
             if (-not $ready) { Start-Sleep -Seconds 3 }
           }
-          if (-not $ready) {
-            Write-Host 'PostgreSQL services:'
-            Get-Service | Where-Object { $_.Name -like 'postgres*' } | Format-Table Name, Status -AutoSize | Out-String | Write-Host
-            Write-Host 'Listeners on 5432/5433:'
-            netstat -ano | Select-String ':5432|:5433'
-            $pgLogDir = 'C:\Program Files\PostgreSQL\17\data\log'
-            if (Test-Path $pgLogDir) { Get-ChildItem $pgLogDir -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | ForEach-Object { Get-Content $_.FullName -Tail 40 } }
-            throw 'PostgreSQL did not become ready.'
-          }
+          if (-not $ready) { Get-Content (Join-Path $PWD 'pg-server.log') -Tail 40; throw 'PostgreSQL did not become ready.' }
           & (Join-Path $pgBin 'psql.exe') -h 127.0.0.1 -p 5433 -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE atrium_app LOGIN PASSWORD 'smokeapp';" -c 'CREATE DATABASE atrium OWNER atrium_app;'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host 'PostgreSQL ready on 5433; role and database created.'
@@ -618,82 +658,4 @@ jobs:
           path: |
             server.log
             shots
-          if-no-files-found: warn
-
-  deploy-windows:
-    name: Deploy smoke test (lab mode)
-    needs: build
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Run the CI gate
-        shell: pwsh
-        run: |
-          & ./tests/ci-gate.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Locate the installer
-        id: inst
-        shell: pwsh
-        run: |
-          $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
-          "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-      # Deploy consumes a bundle; it never compiles. Until now this
-      # job installed the SDK and WiX and ran a second full build
-      # solely to produce the bundle the build job had already built
-      # and uploaded. It downloads that bundle instead: Deploy mode
-      # needs neither dotnet nor WiX, and the bundle's redist folder
-      # makes the separate redistributable download unnecessary too.
-      # Deploy Stage 0 still verifies every bundle file against the
-      # manifest before changing anything on the machine.
-      - name: Download the bundle built by the build job
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
-        with:
-          name: atrium-bundle-${{ needs.build.outputs.stamp }}
-          path: Atrium-Bundle
-      - name: Verify the downloaded bundle
-        shell: pwsh
-        run: |
-          if (-not (Test-Path 'Atrium-Bundle/manifest.json')) { throw 'Bundle manifest missing from the downloaded artifact.' }
-          Write-Host 'Bundle downloaded from the build job; Deploy consumes it exactly as built.'
-      - name: Fill the lab values in the CI config copy
-        shell: pwsh
-        run: |
-          # The Deploy configuration gate (issue #35) refuses an
-          # unedited config. LabMode exempts the CA and the archive
-          # targets (it substitutes its own); the host name and the
-          # seed password are filled here with the lab values the
-          # smoke test expects.
-          $path = './Atrium-Config.psd1'
-          $text = [IO.File]::ReadAllText($path)
-          $fills = [ordered]@{ HostName = 'atrium'; SeedAdminPassword = 'ChangeMe!2026' }
-          foreach ($k in $fills.Keys) {
-            $pattern = "(?m)^(\s*$k\s*=\s*)'__CHANGE_ME__'"
-            if ($text -notmatch $pattern) { throw "Placeholder for $k not found in Atrium-Config.psd1." }
-            $text = $text -replace $pattern, "`$1'$($fills[$k])'"
-            Write-Host "$k <- $($fills[$k])"
-          }
-          [IO.File]::WriteAllText($path, $text)
-      - name: Map the Atrium host name to this machine
-        shell: pwsh
-        run: |
-          Add-Content -Path 'C:\Windows\System32\drivers\etc\hosts' -Value "`n127.0.0.1 atrium"
-          Write-Host 'hosts entry added for atrium.'
-      - name: Run Deploy in lab mode
-        shell: pwsh
-        run: |
-          & ./${{ steps.inst.outputs.file }} -Mode Deploy -LabMode -Unattended -AcceptConfigSummary
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Copy the deploy run log for upload
-        if: always()
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path deploy-logs -Force | Out-Null
-          Copy-Item 'C:\Atrium-Logs\*' deploy-logs -ErrorAction SilentlyContinue
-      - name: Upload the deploy run log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: deploy-log
-          path: deploy-logs
           if-no-files-found: warn
