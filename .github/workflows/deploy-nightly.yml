@@ -1,0 +1,354 @@
+name: Deploy nightly
+
+# The Deploy proof for Atrium: the installer's Deploy mode with
+# -LabMode (self-signed certificate, local archive folders) on a
+# Windows Server runner: IIS site, PostgreSQL, and the built-in
+# smoke test, consuming the bundle this workflow's own build job
+# produced.
+#
+# Deploy ran inside build.yml on every push until Nov 21, 2026. It
+# was the long pole of that workflow (10m 37s of the 12m 45s wall
+# clock measured Nov 20, 2026, almost all of it vendor installer
+# waits), and its verdict does not change what a push needs to know
+# before the next one, so it runs here instead:
+#
+#   - Nightly at 09:00 UTC (01:00 PT), but only when the day
+#     actually changed main: the preflight job compares the last
+#     successful run of this workflow's head SHA with the current
+#     HEAD and skips the build and Deploy jobs when they match.
+#   - On manual dispatch (workflow_dispatch), always: a human
+#     asking for a Deploy proof gets one, guard or no guard.
+#
+# Releases are unaffected: build.yml's release job needs only its
+# own build job, never Deploy.
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: deploy-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Check whether main changed since the last successful nightly
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - name: Compare HEAD with the last successful run of this workflow
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch: the guard does not apply, always run."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy-nightly.yml --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          echo "Last successful nightly head: ${last:-none}"
+          echo "Current head: $GITHUB_SHA"
+          if [ -n "$last" ] && [ "$last" = "$GITHUB_SHA" ]; then
+            echo "No changes since the last successful nightly; skipping the build and Deploy jobs."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Full Windows build
+    runs-on: windows-latest
+    needs: preflight
+    if: needs.preflight.outputs.changed == 'true'
+    outputs:
+      stamp: ${{ steps.inst.outputs.stamp }}
+      file: ${{ steps.inst.outputs.file }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Exclude the workspace from Defender scanning (CI only)
+        shell: pwsh
+        run: |
+          # CI speed only: this runner is ephemeral, and everything
+          # Defender would scan here was either just checked out from
+          # this repository or produced by this job. Real-time
+          # scanning of the publish output and file churn costs
+          # minutes per job. The product installer is untouched: its
+          # Stage 0 Defender precondition is a product feature, and
+          # nothing here weakens a check that runs on a real server.
+          Add-MpPreference -ExclusionPath $PWD.Path
+          Write-Host "Defender exclusions added."
+      - name: Run the CI gate
+        shell: pwsh
+        run: |
+          & ./tests/ci-gate.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Cache the pinned .NET SDK directory
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .dotnet
+          key: atrium-dotnet-sdk-10.0.100-${{ runner.os }}
+      - name: Cache the WiX tool directory
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.dotnet/tools
+          key: atrium-wix-5.0.2-${{ runner.os }}
+      - name: Cache the NuGet packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.nuget/packages
+          key: atrium-nuget-${{ runner.os }}-${{ hashFiles('*_Install-Atrium.ps1') }}
+          restore-keys: |
+            atrium-nuget-${{ runner.os }}-
+      - name: Install the pinned .NET SDK (10.0.100)
+        shell: pwsh
+        run: |
+          # A workspace-local dotnet root holding exactly the pinned SDK.
+          # The runner image preinstalls other SDKs (and may preset
+          # DOTNET_ROOT to them); a local root plus an explicit
+          # DOTNET_ROOT and PATH entry makes `dotnet --version` resolve
+          # to 10.0.100 deterministically.
+          $dir = Join-Path $PWD '.dotnet'
+          if (Test-Path (Join-Path $dir 'sdk\10.0.100')) {
+            Write-Host 'Pinned SDK 10.0.100 restored from cache; skipping the download.'
+          } else {
+            Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
+            .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
+          }
+          "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Install WiX (pinned 5.0.2)
+        shell: pwsh
+        run: |
+          $toolsDir = Join-Path $env:USERPROFILE '.dotnet\tools'
+          if (Test-Path (Join-Path $toolsDir 'wix.exe')) {
+            Write-Host 'WiX 5.0.2 restored from cache; skipping the tool install.'
+          } else {
+            dotnet tool install --global wix --version 5.0.2
+          }
+          "$toolsDir" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Verify the toolchain pins
+        shell: pwsh
+        run: |
+          $sdk = dotnet --version
+          Write-Host "dotnet --version: $sdk"
+          dotnet --list-sdks
+          if ($sdk -ne '10.0.100') { throw "SDK pin not in effect: dotnet resolved to $sdk, expected 10.0.100." }
+          $wix = (wix --version) -split '\+' | Select-Object -First 1
+          Write-Host "wix --version: $wix"
+          if ($wix.Trim() -ne '5.0.2') { throw "WiX pin not in effect: wix resolved to $wix, expected 5.0.2." }
+      - name: Locate the installer
+        id: inst
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
+          "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "stamp=$($f.Name -replace '_Install-Atrium\.ps1$','')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Parse-check the installer and the config template
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.PSParser]::Tokenize([IO.File]::ReadAllText('${{ steps.inst.outputs.file }}'), [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          $cfg = Import-PowerShellDataFile './Atrium-Config.psd1'
+          Write-Host "Parse OK (installer + Atrium-Config.psd1, $($cfg.Count) settings)"
+      - name: Run the config fixture battery
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          & ./tests/config-battery.ps1 -InstallerPath './${{ steps.inst.outputs.file }}' -TemplatePath './Atrium-Config.psd1' -WorkRoot (Join-Path $env:TEMP 'config-battery')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Cache the version-pinned redistributables
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            redist/postgresql-17.4-windows-x64.exe
+            redist/dotnet-hosting-10.0.0-win.exe
+          key: atrium-redist-pinned-v1
+      - name: Download the redistributables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path redist -Force | Out-Null
+          # The PostgreSQL and hosting-bundle installers are restored
+          # from the cache above when present: both are immutable per
+          # version, and the build still verifies every file against
+          # the installer's SHA-256 pins. The WebView2 bootstrapper is
+          # always downloaded fresh (its link has been republished
+          # under the same URL before; the pin decides acceptance),
+          # and the IISAdministration package is small enough to fetch.
+          $downloads = [ordered]@{
+            'postgresql-17.4-windows-x64.exe' = 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe'
+            'dotnet-hosting-10.0.0-win.exe' = 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.0/dotnet-hosting-10.0.0-win.exe'
+            'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+            'IISAdministration.1.1.0.0.nupkg' = 'https://www.powershellgallery.com/api/v2/package/IISAdministration/1.1.0.0'
+          }
+          foreach ($name in $downloads.Keys) {
+            $dest = Join-Path 'redist' $name
+            if (Test-Path $dest) { Write-Host "Present (cache): $name"; continue }
+            Invoke-WebRequest $downloads[$name] -OutFile $dest
+          }
+          Get-ChildItem redist | Select-Object Name, Length
+      - name: Run the full build
+        shell: pwsh
+        run: |
+          & ./${{ steps.inst.outputs.file }} -Mode Build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'Atrium-Bundle/manifest.json')) { throw 'Bundle manifest missing.' }
+          if (-not (Test-Path 'Atrium-Bundle/payload/shell/Atrium.msi')) { throw 'Shell MSI missing from the bundle.' }
+          Write-Host 'Bundle contents:'
+          Get-ChildItem -Recurse Atrium-Bundle | ForEach-Object { $_.FullName }
+      - name: Install and uninstall the shell MSI
+        shell: pwsh
+        run: |
+          $msi = Join-Path $PWD 'Atrium-Bundle\payload\shell\Atrium.msi'
+          $msiLog = Join-Path $env:TEMP 'atrium-msi-install.log'
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$msiLog`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "MSI install failed with exit code $($p.ExitCode)." }
+          if (-not (Test-Path 'C:\Program Files\Atrium\Atrium.exe')) {
+            # Diagnose before failing: where did the files go, and
+            # what does the verbose installer log say about them?
+            Write-Host 'Atrium.exe is not at the expected path. Searching the usual install roots:'
+            Get-ChildItem 'C:\Program Files', 'C:\Program Files (x86)', "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'Atrium.exe' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+            Write-Host '--- msiexec verbose log: Atrium.exe / INSTALLFOLDER / Return value 3 lines:'
+            Select-String -Path $msiLog -Pattern 'Atrium\.exe|INSTALLFOLDER|Return value 3' | Select-Object -Last 80 | ForEach-Object { $_.Line }
+            throw 'Atrium.exe not found after the MSI install.'
+          }
+          Write-Host 'MSI installed; Atrium.exe present under Program Files.'
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn', '/norestart' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "MSI uninstall failed with exit code $($p.ExitCode)." }
+          if (Test-Path 'C:\Program Files\Atrium\Atrium.exe') { throw 'Atrium.exe still present after the MSI uninstall.' }
+          Write-Host 'MSI uninstalled cleanly.'
+      - name: Upload the bundle as an artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atrium-bundle-${{ steps.inst.outputs.stamp }}
+          path: Atrium-Bundle
+          if-no-files-found: error
+      - name: Copy the installer run log for upload
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path run-logs -Force | Out-Null
+          Copy-Item (Join-Path $env:TEMP 'Atrium-Logs\*') run-logs -ErrorAction SilentlyContinue
+      - name: Upload the installer run log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-log-${{ steps.inst.outputs.stamp }}
+          path: run-logs
+          if-no-files-found: warn
+      - name: Post the build log tail to issue #7 on failure
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $log = Get-ChildItem (Join-Path $env:TEMP 'Atrium-Logs') -Filter '*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+          $body = Join-Path $PWD 'build-failure.md'
+          if ($log) {
+            $tail = (Get-Content $log.FullName -Tail 120) -join "`n"
+            @("Build check failed for commit $env:GITHUB_SHA (run $env:GITHUB_RUN_ID). Last lines of the installer run log ($($log.Name)):", '', '```', $tail, '```') | Set-Content $body
+          } else {
+            @("Build check failed for commit $env:GITHUB_SHA (run $env:GITHUB_RUN_ID). No installer run log was found under TEMP\Atrium-Logs.") | Set-Content $body
+          }
+          gh issue comment 7 --body-file $body
+
+  deploy-windows:
+    name: Deploy smoke test (lab mode)
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Exclude the workspace from Defender scanning (CI only)
+        shell: pwsh
+        run: |
+          # CI speed only: this runner is ephemeral, and everything
+          # Defender would scan here was either just checked out from
+          # this repository or produced by this job. Real-time
+          # scanning of the publish output and file churn costs
+          # minutes per job. The product installer is untouched: its
+          # Stage 0 Defender precondition is a product feature, and
+          # nothing here weakens a check that runs on a real server.
+          Add-MpPreference -ExclusionPath $PWD.Path
+          Add-MpPreference -ExclusionPath 'C:\Atrium-Lab'
+          Add-MpPreference -ExclusionPath 'C:\Program Files\PostgreSQL'
+          Write-Host "Defender exclusions added."
+      - name: Run the CI gate
+        shell: pwsh
+        run: |
+          & ./tests/ci-gate.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Locate the installer
+        id: inst
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
+          "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      # Deploy consumes a bundle; it never compiles. Until now this
+      # job installed the SDK and WiX and ran a second full build
+      # solely to produce the bundle the build job had already built
+      # and uploaded. It downloads that bundle instead: Deploy mode
+      # needs neither dotnet nor WiX, and the bundle's redist folder
+      # makes the separate redistributable download unnecessary too.
+      # Deploy Stage 0 still verifies every bundle file against the
+      # manifest before changing anything on the machine.
+      - name: Download the bundle built by the build job
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: atrium-bundle-${{ needs.build.outputs.stamp }}
+          path: Atrium-Bundle
+      - name: Verify the downloaded bundle
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'Atrium-Bundle/manifest.json')) { throw 'Bundle manifest missing from the downloaded artifact.' }
+          Write-Host 'Bundle downloaded from the build job; Deploy consumes it exactly as built.'
+      - name: Fill the lab values in the CI config copy
+        shell: pwsh
+        run: |
+          # The Deploy configuration gate (issue #35) refuses an
+          # unedited config. LabMode exempts the CA and the archive
+          # targets (it substitutes its own); the host name and the
+          # seed password are filled here with the lab values the
+          # smoke test expects.
+          $path = './Atrium-Config.psd1'
+          $text = [IO.File]::ReadAllText($path)
+          $fills = [ordered]@{ HostName = 'atrium'; SeedAdminPassword = 'ChangeMe!2026' }
+          foreach ($k in $fills.Keys) {
+            $pattern = "(?m)^(\s*$k\s*=\s*)'__CHANGE_ME__'"
+            if ($text -notmatch $pattern) { throw "Placeholder for $k not found in Atrium-Config.psd1." }
+            $text = $text -replace $pattern, "`$1'$($fills[$k])'"
+            Write-Host "$k <- $($fills[$k])"
+          }
+          [IO.File]::WriteAllText($path, $text)
+      - name: Map the Atrium host name to this machine
+        shell: pwsh
+        run: |
+          Add-Content -Path 'C:\Windows\System32\drivers\etc\hosts' -Value "`n127.0.0.1 atrium"
+          Write-Host 'hosts entry added for atrium.'
+      - name: Run Deploy in lab mode
+        shell: pwsh
+        run: |
+          & ./${{ steps.inst.outputs.file }} -Mode Deploy -LabMode -Unattended -AcceptConfigSummary
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Copy the deploy run log for upload
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path deploy-logs -Force | Out-Null
+          Copy-Item 'C:\Atrium-Logs\*' deploy-logs -ErrorAction SilentlyContinue
+      - name: Upload the deploy run log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deploy-log
+          path: deploy-logs
+          if-no-files-found: warn
