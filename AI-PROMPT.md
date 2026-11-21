@@ -57,7 +57,7 @@ These thirteen principles govern every change. A change that violates one needs 
 4. The config file is gated: if any must-change placeholder remains, the installer opens the config in an editor, blocks until it is edited, and loops. An unmodified config cannot be skipped. Deploy prints the effective config with secrets masked and requires a typed YES.
 5. Auth: Active Directory with Kerberos, plus local sign-in with server-side sessions. AD CS exists in the target environment, so the certificate step is verification, not construction. Endpoint deployment of the shell is by Group Policy, as a versioned MSI.
 6. Message model: severity is a property of a root message only (0 Normal, 1 Important as an amber card, 2 Critical as a red card plus a pinned alert bar); replies cannot carry severity and the server rejects it. Edit and delete are author-only by default and configurable; there is no message-history feature; deletions are invisible.
-7. A standalone script, `Build-AtriumShellMsi.ps1`, builds just the client MSI on an administrator's own machine. It can bake a server host into the MSI; when none is baked in, the shell asks the user for the server at first run, tests the connection before applying it, and lets them switch later. When a server is baked in, the shell shows no server choice anywhere.
+7. A standalone script, `Build-AtriumShellMsi.ps1`, builds just the client MSI on an administrator's own machine. It can bake a server host into the MSI; when none is baked in, the shell asks the user for the server at first run, tests the connection before applying it, and lets them switch later. When a server is baked in, the shell shows no server choice anywhere. The script is rebuilt at every server release, at the same time and with the same CalVer stamp as the server build, and the release carries it as `<stamp>_Build-AtriumShellMsi.ps1` beside the installer.
 
 ## 6. How work is done here
 
@@ -71,15 +71,17 @@ These thirteen principles govern every change. A change that violates one needs 
 8. Documents for this project contain no em dashes. Use colons, commas, periods, or parentheses.
 9. Publishing to this repository goes through the GitHub web interface (prepared-file uploads for whole files; the web editor truncates large whole-file replacements, so never paste a full large file into it). The owner's standing instruction: publish without asking first, and tell the owner when you are publishing. Platform approval prompts, where they exist, are outside any AI's control and are not a reason to ask twice.
 10. Every release description states what changed from the previous build. The release body comes from release-notes/<stamp>.md.
-11. Exactly one installer file sits at the repository root. A new build replaces the old one; old installers do not accumulate.
+11. Every server release builds the standalone client MSI script at the same time and with the same CalVer stamp: the stamped copy, `<stamp>_Build-AtriumShellMsi.ps1`, ships as a release asset beside the installer, stamped from the same single stamp source.
+12. Exactly one installer file sits at the repository root. A new build replaces the old one; old installers do not accumulate.
 
 ## 7. Repository map
 
 1. `README.md`: the public face. Status, overview, screenshots, architecture, operating model, feature set, message format rules, verification status, roadmap, and the project document index.
 2. `<stamp>_Install-Atrium.ps1` and `Atrium-Config.psd1`: the product. The installer's own comments and the config file's per-setting comments are documentation and are kept accurate.
+3. `Build-AtriumShellMsi.ps1`: the standalone client MSI builder (section 5, point 7). At release time a stamped copy ships with the release; the copy in the repository is the source for that stamping.
 3. `docs/gallery.md` and `docs/images/`: the screenshot gallery, published at https://schrebra.github.io/Atrium/. Screenshots are captured from a named build and the header says which.
-4. `release-notes/<stamp>.md`: one file per build; becomes that release's description verbatim.
-5. `tests/ci-contract-check.ps1`: the contract checks the CI workflows lean on. When CI resumes, this runs first in the build, runtime, and deploy jobs.
+5. `release-notes/<stamp>.md`: one file per build; becomes that release's description verbatim.
+6. `tests/ci-contract-check.ps1`: the contract checks the CI workflows lean on. When CI resumes, this runs first in the build, runtime, and deploy jobs.
 6. The issue tracker: the live backlog, including the handwritten feature list filed as issues #52 to #76 and the installer-review findings at #84 to #93. Check it before proposing work; the idea may already be filed, and it may already carry a ruling.
 
 ## 8. Settled: do not reopen
