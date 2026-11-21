@@ -31,7 +31,7 @@ Where Atrium stands, what is still needed, and in what order. Current state: **b
 
 **Conditional:** webhooks (R-9): held until a concrete consumer appeared; the first one has (the SIEM blocked-attachment catalog, issues #6 and #21). Not yet built.
 
-**Under consideration (not adopted):** high availability with live failover across up to 3 servers (issue #17, raised Nov 19, 2026). Adopting it would supersede the single-VM topology ruling and remove "clustering / multi-node deployment" from the not-planned list below; until Brandon decides, both stand as written.
+**Under consideration (not adopted):** high availability with live failover across up to 3 servers (issue #17, raised Nov 19, 2026). Adopting it would supersede the single-VM topology ruling and remove "clustering / multi-node deployment" from the not-planned list below; until the owner decides, both stand as written.
 
 ## Verification backlog (lab phase)
 
