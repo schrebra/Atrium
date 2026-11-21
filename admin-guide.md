@@ -1,7 +1,7 @@
 # Atrium Administrator Guide
 
 **Product:** Atrium (self-hosted team chat for internal networks)
-**Applies to:** build **261120_1530**, schema v16
+**Applies to:** build **261120_1820**, schema v17
 **Status:** Early alpha. This release is not for production use. Where a
 capability is planned rather than implemented, this guide states that and
 names the tracking issue.
@@ -14,7 +14,7 @@ installer is correct and the guide is in error: file an issue.
 **Conventions used in this guide**
 
 - `<stamp>` is the build stamp in the installer file name, in the format
-  `YYMMDD_HHMM` (for example, `261120_1530_Install-Atrium.ps1`).
+  `YYMMDD_HHMM` (for example, `261120_1820_Install-Atrium.ps1`).
 - Commands are shown exactly as they are to be typed.
 - **Note** marks information that prevents a common mistake. **Warning**
   marks an action that destroys data or removes access if performed as
@@ -738,7 +738,7 @@ line is the diagnosis.
 
 ## 12. Verification status and known limits
 
-Verified as of build 261120_1530:
+Verified as of build 261120_1820:
 
 - Full Build mode, the shell MSI build and installation, live-server API
   test batteries on Windows and Linux, the user interface test battery,
