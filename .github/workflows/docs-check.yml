@@ -1,0 +1,46 @@
+name: Docs and contract gate
+
+# Lightweight companion to build.yml ("Build check and release").
+# The full workflow's push trigger carries a paths filter (the
+# installer, Atrium-Config.psd1, .github/workflows/**): a push that
+# touches none of those never starts it. This workflow's
+# paths-ignore is the same three patterns, and GitHub skips a
+# paths-ignore workflow only when EVERY file in the push matches
+# the ignore list, so the two workflows partition pushes:
+#
+#   - A push touching only installer/config/workflow files runs
+#     the full workflow; this one is skipped (every file ignored).
+#   - A push touching only other files (docs, tests, gallery) runs
+#     this gate only; the full workflow is skipped (no file matches
+#     its paths).
+#   - A push touching both sets runs both: the full battery for
+#     the installer side, and this gate as the fast first signal.
+#
+# Every push runs at least one of the two: any changed file either
+# matches one of the three patterns or it does not. This job runs
+# the same CI gate the full workflow's jobs start with
+# (tests/ci-gate.ps1) and nothing else: no builds, no releases.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*_Install-Atrium.ps1'
+      - 'Atrium-Config.psd1'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: CI gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run the CI gate
+        shell: pwsh
+        run: |
+          & ./tests/ci-gate.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

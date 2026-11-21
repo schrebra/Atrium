@@ -16,10 +16,27 @@ name: Build check and release
 #   runtime-linux    The same API battery on Ubuntu against a
 #                    PostgreSQL 17 service, plus the headless-Chrome
 #                    UI battery (tests/ui-battery.js).
-#   deploy-windows   The full build, then the installer's Deploy mode
-#                    with -LabMode (self-signed certificate, local
-#                    archive folders) on the Windows Server runner:
-#                    IIS site, PostgreSQL, and the built-in smoke test.
+#   deploy-windows   Downloads the bundle the build job produced (it
+#                    does not build a second time), then the
+#                    installer's Deploy mode with -LabMode
+#                    (self-signed certificate, local archive folders)
+#                    on the Windows Server runner: IIS site,
+#                    PostgreSQL, and the built-in smoke test.
+#
+# Push partitioning: this workflow's push trigger carries a paths
+# filter (the installer, Atrium-Config.psd1, .github/workflows/**),
+# so pushes that touch none of those skip the full battery.
+# .github/workflows/docs-check.yml carries the same three patterns
+# as paths-ignore and runs only the CI gate for the pushes this
+# workflow skips. Every job in both workflows starts with
+# tests/ci-gate.ps1, the single gate that runs the contract check
+# and the archive-command regression test.
+#
+# Release bodies: when the tree carries release-notes/<stamp>.md,
+# the release job uses it as the new release's body at creation
+# time. A release that already exists is never modified; with no
+# notes file, the job falls back to the default body it has always
+# used.
 #
 # The installer ships the SHA-256 pin and the official download
 # location of every redistributable: CI jobs download the four
@@ -27,10 +44,27 @@ name: Build check and release
 # mismatch fails the build, naming the file). The release ships the
 # pristine repo installer and config, never a CI copy or the CI
 # bundle.
+#
+# Speed: jobs cache the pinned SDK directory, the WiX tool
+# directory, the NuGet package cache, and the version-immutable
+# downloads (the PostgreSQL 17.4 and hosting-bundle 10.0.0
+# installers, the Chrome for Testing build) between runs. A cache
+# only ever restores the exact pinned content its key names, and
+# every consumer still verifies what it restored: the SDK and WiX
+# version assertions, RestoreLockedMode on every publish, and the
+# installer's SHA-256 pin check on every redistributable all run
+# unchanged, so a stale or wrong cache fails loud instead of
+# passing silently. The WebView2 bootstrapper is never cached: its
+# download link has been republished under the same URL before, so
+# it is fetched fresh on every run and accepted only on the pin.
 
 on:
   push:
     branches: [main]
+    paths:
+      - '*_Install-Atrium.ps1'
+      - 'Atrium-Config.psd1'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
@@ -50,11 +84,28 @@ jobs:
       file: ${{ steps.inst.outputs.file }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Validate the CI contracts
+      - name: Run the CI gate
         shell: pwsh
         run: |
-          & ./tests/ci-contract-check.ps1
+          & ./tests/ci-gate.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Cache the pinned .NET SDK directory
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .dotnet
+          key: atrium-dotnet-sdk-10.0.100-${{ runner.os }}
+      - name: Cache the WiX tool directory
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.dotnet/tools
+          key: atrium-wix-7.0.1-${{ runner.os }}
+      - name: Cache the NuGet packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.nuget/packages
+          key: atrium-nuget-${{ runner.os }}-${{ hashFiles('*_Install-Atrium.ps1') }}
+          restore-keys: |
+            atrium-nuget-${{ runner.os }}-
       - name: Install the pinned .NET SDK (10.0.100)
         shell: pwsh
         run: |
@@ -64,15 +115,24 @@ jobs:
           # DOTNET_ROOT and PATH entry makes `dotnet --version` resolve
           # to 10.0.100 deterministically.
           $dir = Join-Path $PWD '.dotnet'
-          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
-          .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
+          if (Test-Path (Join-Path $dir 'sdk\10.0.100')) {
+            Write-Host 'Pinned SDK 10.0.100 restored from cache; skipping the download.'
+          } else {
+            Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
+            .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
+          }
           "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
           $dir | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Install WiX (pinned 7.0.1)
         shell: pwsh
         run: |
-          dotnet tool install --global wix --version 7.0.1
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+          $toolsDir = Join-Path $env:USERPROFILE '.dotnet\tools'
+          if (Test-Path (Join-Path $toolsDir 'wix.exe')) {
+            Write-Host 'WiX 7.0.1 restored from cache; skipping the tool install.'
+          } else {
+            dotnet tool install --global wix --version 7.0.1
+          }
+          "$toolsDir" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Verify the toolchain pins
         shell: pwsh
         run: |
@@ -105,14 +165,35 @@ jobs:
         run: |
           & ./tests/config-battery.ps1 -InstallerPath './${{ steps.inst.outputs.file }}' -TemplatePath './Atrium-Config.psd1' -WorkRoot (Join-Path $env:TEMP 'config-battery')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Cache the version-pinned redistributables
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            redist/postgresql-17.4-windows-x64.exe
+            redist/dotnet-hosting-10.0.0-win.exe
+          key: atrium-redist-pinned-v1
       - name: Download the redistributables
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path redist -Force | Out-Null
-          Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'redist/postgresql-17.4-windows-x64.exe'
-          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.0/dotnet-hosting-10.0.0-win.exe' -OutFile 'redist/dotnet-hosting-10.0.0-win.exe'
-          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-          Invoke-WebRequest 'https://www.powershellgallery.com/api/v2/package/IISAdministration/1.1.0.0' -OutFile 'redist/IISAdministration.1.1.0.0.nupkg'
+          # The PostgreSQL and hosting-bundle installers are restored
+          # from the cache above when present: both are immutable per
+          # version, and the build still verifies every file against
+          # the installer's SHA-256 pins. The WebView2 bootstrapper is
+          # always downloaded fresh (its link has been republished
+          # under the same URL before; the pin decides acceptance),
+          # and the IISAdministration package is small enough to fetch.
+          $downloads = [ordered]@{
+            'postgresql-17.4-windows-x64.exe' = 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe'
+            'dotnet-hosting-10.0.0-win.exe' = 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.0/dotnet-hosting-10.0.0-win.exe'
+            'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+            'IISAdministration.1.1.0.0.nupkg' = 'https://www.powershellgallery.com/api/v2/package/IISAdministration/1.1.0.0'
+          }
+          foreach ($name in $downloads.Keys) {
+            $dest = Join-Path 'redist' $name
+            if (Test-Path $dest) { Write-Host "Present (cache): $name"; continue }
+            Invoke-WebRequest $downloads[$name] -OutFile $dest
+          }
           Get-ChildItem redist | Select-Object Name, Length
       - name: Run the full build
         shell: pwsh
@@ -196,7 +277,11 @@ jobs:
             echo "Release $tag already exists; skipping."
             exit 0
           fi
-          cat > notes.md <<'EOF'
+          notes_file="release-notes/$STAMP.md"
+          if [ -f "$notes_file" ]; then
+            echo "Release body: the notes shipped in the repo at $notes_file."
+          else
+            cat > notes.md <<'EOF'
           **Early alpha — not for production use.**
 
           The installer for this build is attached below, with its
@@ -210,24 +295,42 @@ jobs:
           of this exact installer passed — emit, compile, shell MSI, and
           bundle manifest verification.
           EOF
-          gh release create "$tag" "$INSTALLER" "Atrium-Config.psd1" --title "Atrium build $STAMP (early alpha)" --notes-file notes.md --prerelease
+            notes_file=notes.md
+          fi
+          gh release create "$tag" "$INSTALLER" "Atrium-Config.psd1" --title "Atrium build $STAMP (early alpha)" --notes-file "$notes_file" --prerelease
 
   runtime-windows:
     name: Windows runtime smoke test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Validate the CI contracts
+      - name: Run the CI gate
         shell: pwsh
         run: |
-          & ./tests/ci-contract-check.ps1
+          & ./tests/ci-gate.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Cache the pinned .NET SDK directory
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .dotnet
+          key: atrium-dotnet-sdk-10.0.100-${{ runner.os }}
+      - name: Cache the NuGet packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.nuget/packages
+          key: atrium-nuget-${{ runner.os }}-${{ hashFiles('*_Install-Atrium.ps1') }}
+          restore-keys: |
+            atrium-nuget-${{ runner.os }}-
       - name: Install the pinned .NET SDK (10.0.100)
         shell: pwsh
         run: |
           $dir = Join-Path $PWD '.dotnet'
-          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
-          .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
+          if (Test-Path (Join-Path $dir 'sdk\10.0.100')) {
+            Write-Host 'Pinned SDK 10.0.100 restored from cache; skipping the download.'
+          } else {
+            Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
+            .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
+          }
           "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
           $dir | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Locate the installer
@@ -242,6 +345,11 @@ jobs:
         run: |
           & ./${{ steps.inst.outputs.file }} -Mode Build -EmitOnly -BundlePath (Join-Path $PWD 'ci-bundle') -WorkRoot (Join-Path $PWD 'ci-work')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Cache the PostgreSQL installer
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: pg-installer.exe
+          key: atrium-postgresql-17.4-1-windows-x64
       - name: Install PostgreSQL 17
         shell: pwsh
         run: |
@@ -257,7 +365,8 @@ jobs:
             Write-Host "Existing PostgreSQL uninstaller exit code: $($u.ExitCode)"
             Remove-Item 'C:\Program Files\PostgreSQL\17' -Recurse -Force -ErrorAction SilentlyContinue
           }
-          Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'pg-installer.exe'
+          if (Test-Path '.\pg-installer.exe') { Write-Host 'PostgreSQL installer restored from cache; skipping the download.' }
+          else { Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'pg-installer.exe' }
           $p = Start-Process '.\pg-installer.exe' -ArgumentList '--mode', 'unattended', '--unattendedmodeui', 'none', '--superpassword', 'CiSuper!2026', '--serverport', '5433', '--servicename', 'postgresql-ci' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "PostgreSQL installer failed with exit code $($p.ExitCode)." }
           $pgBin = 'C:\Program Files\PostgreSQL\17\bin'
@@ -286,10 +395,17 @@ jobs:
         shell: pwsh
         run: |
           $src = Join-Path $PWD 'ci-work\src'
-          dotnet publish (Join-Path $src 'Server\Atrium.Server.csproj') -c Release -o app -p:RestoreLockedMode=true --nologo -v q
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet publish (Join-Path $src 'Client\Atrium.Client.csproj') -c Release -o client-publish -p:RestoreLockedMode=true --nologo -v q
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The server and client publishes are independent (separate
+          # projects, separate output directories); run them
+          # concurrently and check both exit codes, exactly as the
+          # serial version checked each in turn.
+          $serverArgs = @('publish', (Join-Path $src 'Server\Atrium.Server.csproj'), '-c', 'Release', '-o', 'app', '-p:RestoreLockedMode=true', '--nologo', '-v', 'q')
+          $clientArgs = @('publish', (Join-Path $src 'Client\Atrium.Client.csproj'), '-c', 'Release', '-o', 'client-publish', '-p:RestoreLockedMode=true', '--nologo', '-v', 'q')
+          $serverProc = Start-Process dotnet -ArgumentList $serverArgs -PassThru -NoNewWindow
+          $clientProc = Start-Process dotnet -ArgumentList $clientArgs -PassThru -NoNewWindow
+          $serverProc.WaitForExit(); $clientProc.WaitForExit()
+          if ($serverProc.ExitCode -ne 0) { exit $serverProc.ExitCode }
+          if ($clientProc.ExitCode -ne 0) { exit $clientProc.ExitCode }
           # Same per-file merge the installer's B1 performs, including
           # the long-path normalization for the relative-path math.
           $clientWww = (Get-Item (Join-Path $PWD 'client-publish\wwwroot')).FullName
@@ -373,15 +489,31 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Validate the CI contracts
+      - name: Run the CI gate
         shell: pwsh
         run: |
-          & ./tests/ci-contract-check.ps1
+          & ./tests/ci-gate.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Cache the pinned .NET SDK directory
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .dotnet
+          key: atrium-dotnet-sdk-10.0.100-${{ runner.os }}
+      - name: Cache the NuGet packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.nuget/packages
+          key: atrium-nuget-${{ runner.os }}-${{ hashFiles('*_Install-Atrium.ps1') }}
+          restore-keys: |
+            atrium-nuget-${{ runner.os }}-
       - name: Install the pinned .NET SDK (10.0.100)
         run: |
-          curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh
-          bash dotnet-install.sh --version 10.0.100 --install-dir "$PWD/.dotnet"
+          if [ -d "$PWD/.dotnet/sdk/10.0.100" ]; then
+            echo 'Pinned SDK 10.0.100 restored from cache; skipping the download.'
+          else
+            curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh
+            bash dotnet-install.sh --version 10.0.100 --install-dir "$PWD/.dotnet"
+          fi
           echo "DOTNET_ROOT=$PWD/.dotnet" >> "$GITHUB_ENV"
           echo "$PWD/.dotnet" >> "$GITHUB_PATH"
       - name: Locate the installer
@@ -405,8 +537,18 @@ jobs:
           psql -h 127.0.0.1 -p 5432 -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE atrium_app LOGIN PASSWORD 'smokeapp';" -c 'CREATE DATABASE atrium OWNER atrium_app;'
       - name: Publish the server and client, merge the client wwwroot
         run: |
-          dotnet publish ci-work/src/Server/Atrium.Server.csproj -c Release -o app -p:RestoreLockedMode=true --nologo -v q
-          dotnet publish ci-work/src/Client/Atrium.Client.csproj -c Release -o client-publish -p:RestoreLockedMode=true --nologo -v q
+          # The server and client publishes are independent; run
+          # them concurrently and fail on either exit code, as the
+          # serial version did. Each wait is guarded so a failure in
+          # one does not stop the other before its code is checked.
+          dotnet publish ci-work/src/Server/Atrium.Server.csproj -c Release -o app -p:RestoreLockedMode=true --nologo -v q &
+          server_pid=$!
+          dotnet publish ci-work/src/Client/Atrium.Client.csproj -c Release -o client-publish -p:RestoreLockedMode=true --nologo -v q &
+          client_pid=$!
+          server_code=0; wait $server_pid || server_code=$?
+          client_code=0; wait $client_pid || client_code=$?
+          if [ $server_code -ne 0 ]; then echo "Server publish failed with exit code $server_code."; exit $server_code; fi
+          if [ $client_code -ne 0 ]; then echo "Client publish failed with exit code $client_code."; exit $client_code; fi
           mkdir -p app/wwwroot
           cp -r client-publish/wwwroot/. app/wwwroot/
           test -f app/wwwroot/index.html
@@ -446,10 +588,19 @@ jobs:
         env:
           ATRIUM_BASE: 'http://127.0.0.1:5080'
         run: python3 tests/api-battery.py
+      - name: Cache Chrome for Testing
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: chrome-linux64
+          key: atrium-chrome-131.0.6778.204-linux64
       - name: Install Chrome for Testing and the UI battery dependencies
         run: |
-          curl -sSL -o chrome.zip 'https://storage.googleapis.com/chrome-for-testing-public/131.0.6778.204/linux64/chrome-linux64.zip'
-          unzip -q chrome.zip
+          if [ -x chrome-linux64/chrome ]; then
+            echo 'Chrome for Testing 131.0.6778.204 restored from cache.'
+          else
+            curl -sSL -o chrome.zip 'https://storage.googleapis.com/chrome-for-testing-public/131.0.6778.204/linux64/chrome-linux64.zip'
+            unzip -q chrome.zip
+          fi
           npm --prefix tests install --no-audit --no-fund
       - name: Run the UI battery
         env:
@@ -471,27 +622,15 @@ jobs:
 
   deploy-windows:
     name: Deploy smoke test (lab mode)
+    needs: build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Validate the CI contracts
+      - name: Run the CI gate
         shell: pwsh
         run: |
-          & ./tests/ci-contract-check.ps1
+          & ./tests/ci-gate.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Install the pinned .NET SDK (10.0.100)
-        shell: pwsh
-        run: |
-          $dir = Join-Path $PWD '.dotnet'
-          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile 'dotnet-install.ps1'
-          .\dotnet-install.ps1 -Version '10.0.100' -InstallDir $dir
-          "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          $dir | Out-File -FilePath $env:GITHUB_PATH -Append
-      - name: Install WiX (pinned 7.0.1)
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 7.0.1
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Locate the installer
         id: inst
         shell: pwsh
@@ -499,14 +638,24 @@ jobs:
           $f = Get-ChildItem -Filter '*_Install-Atrium.ps1' | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $f) { throw 'No *_Install-Atrium.ps1 at the repo root.' }
           "file=$($f.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-      - name: Download the redistributables
+      # Deploy consumes a bundle; it never compiles. Until now this
+      # job installed the SDK and WiX and ran a second full build
+      # solely to produce the bundle the build job had already built
+      # and uploaded. It downloads that bundle instead: Deploy mode
+      # needs neither dotnet nor WiX, and the bundle's redist folder
+      # makes the separate redistributable download unnecessary too.
+      # Deploy Stage 0 still verifies every bundle file against the
+      # manifest before changing anything on the machine.
+      - name: Download the bundle built by the build job
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: atrium-bundle-${{ needs.build.outputs.stamp }}
+          path: Atrium-Bundle
+      - name: Verify the downloaded bundle
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path redist -Force | Out-Null
-          Invoke-WebRequest 'https://get.enterprisedb.com/postgresql/postgresql-17.4-1-windows-x64.exe' -OutFile 'redist/postgresql-17.4-windows-x64.exe'
-          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/10.0.0/dotnet-hosting-10.0.0-win.exe' -OutFile 'redist/dotnet-hosting-10.0.0-win.exe'
-          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'redist/MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-          Invoke-WebRequest 'https://www.powershellgallery.com/api/v2/package/IISAdministration/1.1.0.0' -OutFile 'redist/IISAdministration.1.1.0.0.nupkg'
+          if (-not (Test-Path 'Atrium-Bundle/manifest.json')) { throw 'Bundle manifest missing from the downloaded artifact.' }
+          Write-Host 'Bundle downloaded from the build job; Deploy consumes it exactly as built.'
       - name: Fill the lab values in the CI config copy
         shell: pwsh
         run: |
@@ -525,12 +674,6 @@ jobs:
             Write-Host "$k <- $($fills[$k])"
           }
           [IO.File]::WriteAllText($path, $text)
-      - name: Run the full build (produces the bundle Deploy consumes)
-        shell: pwsh
-        run: |
-          & ./${{ steps.inst.outputs.file }} -Mode Build
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (Test-Path 'Atrium-Bundle/manifest.json')) { throw 'Bundle manifest missing.' }
       - name: Map the Atrium host name to this machine
         shell: pwsh
         run: |
