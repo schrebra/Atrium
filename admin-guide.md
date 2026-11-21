@@ -1,7 +1,7 @@
 # Atrium Administrator Guide
 
 **Product:** Atrium (self-hosted team chat for internal networks)
-**Applies to:** build **261120_1820**, schema v17
+**Applies to:** build **261120_1912**, schema v17
 **Status:** Early alpha. This release is not for production use. Where a
 capability is planned rather than implemented, this guide states that and
 names the tracking issue.
@@ -14,7 +14,7 @@ installer is correct and the guide is in error: file an issue.
 **Conventions used in this guide**
 
 - `<stamp>` is the build stamp in the installer file name, in the format
-  `YYMMDD_HHMM` (for example, `261120_1820_Install-Atrium.ps1`).
+  `YYMMDD_HHMM` (for example, `261120_1912_Install-Atrium.ps1`).
 - Commands are shown exactly as they are to be typed.
 - **Note** marks information that prevents a common mistake. **Warning**
   marks an action that destroys data or removes access if performed as
@@ -637,7 +637,15 @@ new one is verified.
 - **WAL archiving.** PostgreSQL archives its write-ahead log continuously
   to `WalArchivePath` (an off-server target in production), with a
   300-second archive timeout. The recovery point objective (RPO) is 15
-  minutes.
+  minutes. Both archive and base-backup targets must grant write access
+  to the PostgreSQL service account: archiving and base backups run as
+  that account, not as the operator running Deploy. The installer's
+  default service identity is NetworkService, which reaches a UNC share
+  as the server's machine account (DOMAIN\<server name>$), so a UNC
+  target must grant that machine account write access on both the share
+  and the directory. Deploy proves this end to end: Stage 3 forces a
+  WAL segment and fails unless the segment arrives at `WalArchivePath`
+  with no archiver failures.
 - **Base backups.** Stage 3 of Deploy writes a verified base backup to
   `BaseBackupPath`. Point-in-time recovery is a base backup plus WAL
   replay.
@@ -738,7 +746,7 @@ line is the diagnosis.
 
 ## 12. Verification status and known limits
 
-Verified as of build 261120_1820:
+Verified as of build 261120_1912:
 
 - Full Build mode, the shell MSI build and installation, live-server API
   test batteries on Windows and Linux, the user interface test battery,
