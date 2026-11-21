@@ -388,7 +388,12 @@
     # ========================================================================
 
     DotNetSdkVersion = '10.0.100'
-    WixVersion = '7.0.1'
+    # WiX is pinned to the v5 line on purpose: the Open Source
+    # Maintenance Fee EULA applies to the WiX v6 and later binaries
+    # only, so v5 builds the shell MSI with no fee and no EULA
+    # acceptance step. The trade is support: the v5 line is out of
+    # community support, which is accepted for a build-time tool.
+    WixVersion = '5.0.2'
     MinShellVersion = '0.1.0'
 
     # ========================================================================
