@@ -1,7 +1,7 @@
 # Atrium Administrator Guide
 
 **Product:** Atrium (self-hosted team chat for internal networks)
-**Applies to:** build **261120_2022**, schema v17
+**Applies to:** build **261120_2139**, schema v17
 **Status:** Early alpha. This release is not for production use. Where a
 capability is planned rather than implemented, this guide states that and
 names the tracking issue.
@@ -14,7 +14,7 @@ installer is correct and the guide is in error: file an issue.
 **Conventions used in this guide**
 
 - `<stamp>` is the build stamp in the installer file name, in the format
-  `YYMMDD_HHMM` (for example, `261120_2022_Install-Atrium.ps1`).
+  `YYMMDD_HHMM` (for example, `261120_2139_Install-Atrium.ps1`).
 - Commands are shown exactly as they are to be typed.
 - **Note** marks information that prevents a common mistake. **Warning**
   marks an action that destroys data or removes access if performed as
@@ -374,8 +374,8 @@ names the stage and the failed check, and no later stage runs.
 | 0 Preflight | Checks administrator rights, the operating system, and the PowerShell version. Verifies every bundle file against `manifest.json`. Checks CA reachability (skipped in lab mode) and free disk space. Runs the hardware tier comparison (§5.1). Runs the attachment scanner precondition (§5.1). Installs the pinned IISAdministration module if it is absent: the bundle copy first, then the PowerShell Gallery package; either source is accepted only if its SHA-256 matches the pin shipped in the installer. | If any check fails, nothing on the server has been changed. |
 | 1 Teardown | Removes the previous deployment completely: the IIS site and application pool, the PostgreSQL service, data directory, and installation, the install folder, and any prior certificate for the Atrium hostname. | Nothing of the previous deployment remains. |
 | 2 Certificate | Production: enrolls a certificate from AD CS. Lab mode: creates a self-signed certificate and trusts it on the server. | The certificate's subject alternative name matches the hostname, a private key is present, and expiry is more than 30 days out. |
-| 3 Database | Installs PostgreSQL unattended with a generated superuser password. Configures WAL archiving to `WalArchivePath`. Creates the database and the least-privilege application role. Applies the schema. | A schema version probe returns the expected version. A first base backup is written to `BaseBackupPath`. The run log is checked and contains neither generated password. |
-| 4 Application | Installs the .NET Hosting Bundle and the required Windows features. Copies the payload. Writes the production application configuration. Creates the IIS application pool (AlwaysRunning, no idle timeout) and the HTTPS site (SNI binding, auto-start, preload enabled). | `https://<hostname>/health` returns a healthy response. |
+| 3 Database | Installs PostgreSQL unattended with a generated superuser password, and installs the .NET Hosting Bundle at the same time: the two vendor installers are independent, so they run in parallel and Deploy pays the slower of the two instead of their sum. Configures WAL archiving to `WalArchivePath`. Creates the database and the least-privilege application role. Applies the schema. | A schema version probe returns the expected version. A first base backup is written to `BaseBackupPath`. The run log is checked and contains neither generated password. |
+| 4 Application | Verifies the .NET Hosting Bundle installation from Stage 3 (the ASP.NET Core Module file is present) and installs the required Windows features. Copies the payload. Writes the production application configuration. Creates the IIS application pool (AlwaysRunning, no idle timeout) and the HTTPS site (SNI binding, auto-start, preload enabled). | `https://<hostname>/health` returns a healthy response. |
 | 5 Smoke test | Signs in as the seed admin and proves the account arrives flagged must-change-password and that the gate refuses API access (HTTP 403). Exercises the password-change path with a generated password. Creates a channel and posts the first message. Proves a message containing an emoji is rejected (HTTP 400). Restores the seeded state: the password is changed back to the configuration value and the must-change flag is set again. | The message row is read back from PostgreSQL. The flag is confirmed set. A fresh sign-in with the configuration password is performed and confirmed to arrive flagged. |
 
 ### 5.4 The seed admin account
@@ -746,7 +746,7 @@ line is the diagnosis.
 
 ## 12. Verification status and known limits
 
-Verified as of build 261120_2022:
+Verified as of build 261120_2139:
 
 - Full Build mode, the shell MSI build and installation, live-server API
   test batteries on Windows and Linux, the user interface test battery,
