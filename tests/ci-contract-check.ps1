@@ -13,6 +13,12 @@
     indication that a contract broke. This script runs first in
     every job and names the broken contract instead.
 
+    The workflow-shape section at the end covers the contracts the
+    pipeline itself added: build.yml's push paths filter, the
+    tests/ci-gate.ps1 invocations that replaced the direct calls to
+    this script, the release-notes/ release-body lookup, and the
+    docs-check.yml partition of the same three patterns.
+
     Exit code 0 means every contract holds. Any failure prints FAIL
     lines naming the contract and exits 1.
 #>
@@ -136,6 +142,34 @@ $batteryParams = @($batteryAst.ParamBlock.Parameters | ForEach-Object { $_.Name.
 $requiredBatteryParams = @('InstallerPath', 'TemplatePath', 'WorkRoot')
 $missingBattery = @($requiredBatteryParams | Where-Object { $_ -notin $batteryParams })
 Check 'contract: config battery declares the parameters the workflow passes' ($missingBattery.Count -eq 0) ($missingBattery -join ', ')
+
+# ---- Workflow shape ---------------------------------------------------------
+# The contracts the pipeline changes add. build.yml's push trigger
+# filters to the installer, the config template, and the workflows;
+# docs-check.yml ignores the same three patterns, so the two
+# workflows partition pushes. Every job in both workflows starts
+# with tests/ci-gate.ps1, which runs this check and the
+# archive-command regression test. The release job takes a new
+# release's body from release-notes/<stamp>.md when one is shipped.
+$gatePath = Join-Path $RepoRoot 'tests/ci-gate.ps1'
+$gateText = if (Test-Path $gatePath) { Get-Content $gatePath -Raw } else { '' }
+Check 'contract: CI gate script exists' (Test-Path $gatePath)
+Check 'contract: gate runs the contract and archive-command checks' ($gateText.Contains('ci-contract-check.ps1') -and $gateText.Contains('archive-command-check.ps1'))
+
+$pushPaths = @('*_Install-Atrium.ps1', 'Atrium-Config.psd1', '.github/workflows/**')
+$missingPushPaths = @($pushPaths | Where-Object { -not $workflowText.Contains("'$_'") })
+Check 'contract: full workflow push trigger filters to installer, config, and workflows' ($missingPushPaths.Count -eq 0) ($missingPushPaths -join ', ')
+$gateCalls = ([regex]::Matches($workflowText, [regex]::Escape('& ./tests/ci-gate.ps1'))).Count
+Check 'contract: gate is invoked in the build, runtime, and deploy jobs' ($gateCalls -eq 4) "found $gateCalls gate invocations in build.yml"
+Check 'contract: full workflow caches the pinned toolchain' ($workflowText.Contains('actions/cache'))
+Check 'contract: publish job takes the release body from release-notes/' ($workflowText.Contains('release-notes/'))
+
+$docsCheckPath = Join-Path $RepoRoot '.github/workflows/docs-check.yml'
+$docsCheckText = if (Test-Path $docsCheckPath) { Get-Content $docsCheckPath -Raw } else { '' }
+Check 'contract: docs-check workflow exists' (Test-Path $docsCheckPath)
+$missingIgnorePaths = @($pushPaths | Where-Object { -not $docsCheckText.Contains("'$_'") })
+Check 'contract: docs-check paths-ignore mirrors the full workflow paths' ($docsCheckText.Contains('paths-ignore') -and $missingIgnorePaths.Count -eq 0) ($missingIgnorePaths -join ', ')
+Check 'contract: docs-check runs the CI gate' ($docsCheckText.Contains('& ./tests/ci-gate.ps1'))
 
 Write-Host ''
 Write-Host "ci-contract-check: $($script:Failures) failure(s)"
