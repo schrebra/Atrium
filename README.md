@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/Platform-Windows%20Server%20%2B%20IIS-0078D6" alt="Windows Server + IIS">
   <img src="https://img.shields.io/badge/Current%20build-261120__1530-5b8cff" alt="Current build 261120_1530">
   <img src="https://img.shields.io/badge/Schema-v16-5b8cff" alt="Schema v16">
-  <img src="https://img.shields.io/badge/Status-early%20alpha%20-%20not%20for%20production-red" alt="Status: early alpha, not for production">
+  <img src="https://img.shields.io/badge/Status-early%20alpha%20--%20not%20for%20production-red" alt="Status: early alpha, not for production">
 </p>
 
 **In plain terms:** Atrium is your organization's own chat app. Think of it as the company lobby on your computer: you walk in, sign in with your work account, and from there you can message coworkers, share pictures, and reach the other tools you need: one front door instead of a bunch of separate ones. It runs as a single deployment on a server you control, entirely on your own network: no cloud, no internet connection required.
