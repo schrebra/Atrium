@@ -411,7 +411,14 @@ jobs:
           New-Item -ItemType Directory -Path $pgRoot -Force | Out-Null
           Copy-Item '.\pg-extract\pgsql\*' -Destination $pgRoot -Recurse -Force
           if (-not (Test-Path (Join-Path $pgBin 'psql.exe'))) { throw 'psql.exe not found after extracting the PostgreSQL binaries.' }
-          $data = Join-Path $pgRoot 'data'
+          # The data directory lives in the workspace, not under
+          # Program Files: initdb restarts itself with a restricted
+          # token when run as an administrator, and that token cannot
+          # create directories under Program Files (first hit: run
+          # 44923477424 of build 261120_2139, initdb "Permission
+          # denied" creating the data directory). The binaries stay
+          # under Program Files; only the cluster data moves.
+          $data = Join-Path $PWD 'pgdata'
           $pwFile = Join-Path $PWD 'pg-superuser-pw.txt'
           Set-Content -Path $pwFile -Value 'CiSuper!2026' -NoNewline
           & (Join-Path $pgBin 'initdb.exe') -D $data -U postgres --pwfile=$pwFile -A scram-sha-256
