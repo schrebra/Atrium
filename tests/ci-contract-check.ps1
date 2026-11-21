@@ -171,6 +171,16 @@ $missingIgnorePaths = @($pushPaths | Where-Object { -not $docsCheckText.Contains
 Check 'contract: docs-check paths-ignore mirrors the full workflow paths' ($docsCheckText.Contains('paths-ignore') -and $missingIgnorePaths.Count -eq 0) ($missingIgnorePaths -join ', ')
 Check 'contract: docs-check runs the CI gate' ($docsCheckText.Contains('& ./tests/ci-gate.ps1'))
 
+# The WiX pin contracts. WiX is pinned to the v5 line because the
+# Open Source Maintenance Fee EULA applies to WiX v6 and later
+# binaries; the config pin and the CI pin must agree, and the
+# installer must not carry a EULA acceptance argument.
+$wixPin = ''
+if ($configText -match "WixVersion\s*=\s*'([0-9.]+)'") { $wixPin = $Matches[1] }
+Check 'contract: WiX pin is a v5 release (pre-OSMF line)' ($wixPin -like '5.*') "config WixVersion is '$wixPin'"
+Check 'contract: CI installs the pinned WiX version' ($workflowText.Contains("dotnet tool install --global wix --version $wixPin")) "build.yml does not install wix $wixPin"
+Check 'contract: installer carries no WiX EULA acceptance' (-not $installerText.Contains('acceptEula'))
+
 Write-Host ''
 Write-Host "ci-contract-check: $($script:Failures) failure(s)"
 exit [math]::Min($script:Failures, 1)
