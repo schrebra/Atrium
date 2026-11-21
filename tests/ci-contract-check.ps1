@@ -160,7 +160,7 @@ $pushPaths = @('*_Install-Atrium.ps1', 'Atrium-Config.psd1', '.github/workflows/
 $missingPushPaths = @($pushPaths | Where-Object { -not $workflowText.Contains("'$_'") })
 Check 'contract: full workflow push trigger filters to installer, config, and workflows' ($missingPushPaths.Count -eq 0) ($missingPushPaths -join ', ')
 $gateCalls = ([regex]::Matches($workflowText, [regex]::Escape('& ./tests/ci-gate.ps1'))).Count
-Check 'contract: gate is invoked in the build, runtime, and deploy jobs' ($gateCalls -eq 4) "found $gateCalls gate invocations in build.yml"
+Check 'contract: gate is invoked in every build.yml job' ($gateCalls -eq 3) "found $gateCalls gate invocations in build.yml"
 Check 'contract: full workflow caches the pinned toolchain' ($workflowText.Contains('actions/cache'))
 Check 'contract: publish job takes the release body from release-notes/' ($workflowText.Contains('release-notes/'))
 
@@ -180,6 +180,39 @@ if ($configText -match "WixVersion\s*=\s*'([0-9.]+)'") { $wixPin = $Matches[1] }
 Check 'contract: WiX pin is a v5 release (pre-OSMF line)' ($wixPin -like '5.*') "config WixVersion is '$wixPin'"
 Check 'contract: CI installs the pinned WiX version' ($workflowText.Contains("dotnet tool install --global wix --version $wixPin")) "build.yml does not install wix $wixPin"
 Check 'contract: installer carries no WiX EULA acceptance' (-not $installerText.Contains('acceptEula'))
+
+# ---- Deploy speed contracts (build 261120_2139) -------------------------
+# The contracts the CI speed work added. Deploy Stage 3 installs
+# PostgreSQL and the ASP.NET Core hosting bundle as one parallel
+# batch; Stage 4 verifies the bundle install instead of running it;
+# the first base backup requests a fast checkpoint; the runtime
+# smoke test provisions PostgreSQL from the EDB binaries ZIP instead
+# of the installer; the Windows jobs exclude the workspace from
+# Defender scanning; and the Deploy job itself lives in
+# deploy-nightly.yml (nightly schedule plus manual dispatch, with a
+# no-change guard on the schedule), not in build.yml.
+Check 'contract: base backup requests a fast checkpoint' ($installerText.Contains('--checkpoint=fast'))
+$parallelAt = $installerText.IndexOf("Invoke-NativeParallel -Stage '3-Database'")
+$parallelWindow = ''
+if ($parallelAt -ge 0) { $parallelWindow = $installerText.Substring($parallelAt, [math]::Min(1500, $installerText.Length - $parallelAt)) }
+Check 'contract: Stage 3 installs PostgreSQL and the hosting bundle in one parallel batch' ($parallelWindow.Contains('FilePath = $installer') -and $parallelWindow.Contains('FilePath = $hosting')) 'both installers must ride the single Invoke-NativeParallel call in Deploy Stage 3'
+Check 'contract: Stage 4 does not run the hosting bundle installer' (-not $installerText.Contains('Invoke-NativeWait -FilePath (Join-Path $BundlePath "redist\$($Config.HostingBundleName)")')) 'Stage 4 verifies the Stage 3 install; it must not reinstall'
+Check 'contract: Stage 4 verifies the hosting bundle landed (ANCM module)' ($installerText.Contains('aspnetcorev2_inprocess.dll'))
+Check 'contract: runtime-windows provisions PostgreSQL from the binaries ZIP' ($workflowText.Contains('postgresql-17.4-1-windows-x64-binaries.zip') -and $workflowText.Contains('initdb.exe') -and -not $workflowText.Contains('pg-installer.exe'))
+$mpCount = ([regex]::Matches($workflowText, 'Add-MpPreference')).Count
+Check 'contract: build.yml Windows jobs exclude the workspace from Defender scanning' ($mpCount -ge 2) "found $mpCount Add-MpPreference lines in build.yml"
+Check 'contract: build.yml has no Deploy job (Deploy is nightly)' (-not $workflowText.Contains("`n  deploy-windows:")) 'the deploy-windows job must live only in deploy-nightly.yml'
+
+$nightlyPath = Join-Path $RepoRoot '.github/workflows/deploy-nightly.yml'
+$nightlyText = if (Test-Path $nightlyPath) { Get-Content $nightlyPath -Raw } else { '' }
+Check 'contract: deploy-nightly workflow exists' (Test-Path $nightlyPath)
+Check 'contract: deploy-nightly runs on a nightly schedule and on dispatch' ($nightlyText.Contains("cron: '0 9 * * *'") -and $nightlyText.Contains('workflow_dispatch'))
+Check 'contract: deploy-nightly carries the Deploy job' ($nightlyText.Contains("`n  deploy-windows:"))
+$nightlyGateCalls = ([regex]::Matches($nightlyText, [regex]::Escape('& ./tests/ci-gate.ps1'))).Count
+Check 'contract: gate is invoked in the nightly build and deploy jobs' ($nightlyGateCalls -eq 2) "found $nightlyGateCalls gate invocations in deploy-nightly.yml"
+Check 'contract: deploy-nightly guards the schedule with the last-successful-head comparison' ($nightlyText.Contains('headSha') -and $nightlyText.Contains('changed=false'))
+$mpNightly = ([regex]::Matches($nightlyText, 'Add-MpPreference')).Count
+Check 'contract: deploy-nightly Windows jobs exclude the workspace from Defender scanning' ($mpNightly -ge 2) "found $mpNightly Add-MpPreference lines in deploy-nightly.yml"
 
 Write-Host ''
 Write-Host "ci-contract-check: $($script:Failures) failure(s)"
