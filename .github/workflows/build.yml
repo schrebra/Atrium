@@ -6,7 +6,7 @@ name: Build check and release
 #   build            The installer's FULL Windows build (-Mode Build:
 #                    emit, compile, shell MSI, bundle) on a Windows
 #                    runner with the exact pinned toolchain (SDK
-#                    10.0.100, WiX 7.0.1), an MSI install/uninstall
+#                    10.0.100, WiX 5.0.2), an MSI install/uninstall
 #                    check, and the bundle kept as a workflow artifact.
 #   release          Publishes a GitHub Release for the build stamp
 #                    if one does not exist yet, installer attached.
@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.dotnet/tools
-          key: atrium-wix-7.0.1-${{ runner.os }}
+          key: atrium-wix-5.0.2-${{ runner.os }}
       - name: Cache the NuGet packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -123,14 +123,14 @@ jobs:
           }
           "DOTNET_ROOT=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
           $dir | Out-File -FilePath $env:GITHUB_PATH -Append
-      - name: Install WiX (pinned 7.0.1)
+      - name: Install WiX (pinned 5.0.2)
         shell: pwsh
         run: |
           $toolsDir = Join-Path $env:USERPROFILE '.dotnet\tools'
           if (Test-Path (Join-Path $toolsDir 'wix.exe')) {
-            Write-Host 'WiX 7.0.1 restored from cache; skipping the tool install.'
+            Write-Host 'WiX 5.0.2 restored from cache; skipping the tool install.'
           } else {
-            dotnet tool install --global wix --version 7.0.1
+            dotnet tool install --global wix --version 5.0.2
           }
           "$toolsDir" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Verify the toolchain pins
@@ -142,7 +142,7 @@ jobs:
           if ($sdk -ne '10.0.100') { throw "SDK pin not in effect: dotnet resolved to $sdk, expected 10.0.100." }
           $wix = (wix --version) -split '\+' | Select-Object -First 1
           Write-Host "wix --version: $wix"
-          if ($wix.Trim() -ne '7.0.1') { throw "WiX pin not in effect: wix resolved to $wix, expected 7.0.1." }
+          if ($wix.Trim() -ne '5.0.2') { throw "WiX pin not in effect: wix resolved to $wix, expected 5.0.2." }
       - name: Locate the installer
         id: inst
         shell: pwsh
