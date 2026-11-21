@@ -208,9 +208,9 @@
   });
 
   // Gestures in the viewer, bound to the whole stage so a swipe works
-  // wherever it starts: a horizontal flick moves between screenshots at
-  // any zoom level; pinch or wheel zooms (1x to 4x); a drag pans while
-  // zoomed; double-tap or double-click toggles zoom.
+  // wherever it starts: at 1x a horizontal flick moves between
+  // screenshots; pinch or wheel zooms (1x to 4x); while zoomed a drag
+  // pans and never navigates; double-tap or double-click toggles zoom.
   var stage = document.getElementById("lb-stage");
   var pinchDist = 0, dragStart = null, gesture = null, lastTap = 0;
   function dist(t) {
@@ -252,9 +252,10 @@
       var t = e.changedTouches[0];
       var dx = t.clientX - gesture.x, dy = t.clientY - gesture.y;
       var dt = Date.now() - gesture.time;
-      // A flick: mostly horizontal, fast, and far enough. Navigates at
-      // any zoom level; step() re-renders, which resets the zoom.
-      if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 600) {
+      // A flick: mostly horizontal, fast, and far enough. Navigates
+      // only at 1x: while zoomed the same motion is a pan, and ending
+      // the pan must not turn into a swipe.
+      if (scale === 1 && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.6 && dt < 600) {
         step(dx < 0 ? 1 : -1);
       }
     }
